@@ -12,6 +12,7 @@ from hyacine.cli.init import (
     _ask,
     _build_config_yaml,
     _build_env_file,
+    _parse_env_file,
     _render_prompt,
     _validate_tz,
     run_init,
@@ -130,6 +131,81 @@ def test_build_env_file_no_token() -> None:
     }
     content = _build_env_file(answers)
     assert "CLAUDE_CODE_OAUTH_TOKEN=" in content
+
+
+def test_build_env_file_merge_preserves_existing_and_unknown_keys() -> None:
+    existing = {
+        "CLAUDE_CODE_OAUTH_TOKEN": "old-secret-token",
+        "HYACINE_GRAPH_TENANT_ID": "old-tenant",
+        "HYACINE_NTFY_TOPIC": "old-topic",
+        "HYACINE_HEALTHCHECKS_UUID": "old-uuid",
+        "USER_CUSTOM_KEY": "user-value",
+        "ANOTHER_UNRELATED": "please-keep-me",
+    }
+    answers: dict[str, object] = {
+        "oauth_token": "",                   # blank → keep old token
+        "graph_tenant_id": "new-tenant",     # provided → override
+        "ntfy_topic": "",                    # blank → keep old topic
+        "healthchecks_uuid": "new-uuid",     # provided → override
+    }
+    content = _build_env_file(answers, existing=existing)
+    assert "CLAUDE_CODE_OAUTH_TOKEN=old-secret-token" in content
+    assert "HYACINE_GRAPH_TENANT_ID=new-tenant" in content
+    assert "HYACINE_NTFY_TOPIC=old-topic" in content
+    assert "HYACINE_HEALTHCHECKS_UUID=new-uuid" in content
+    assert "USER_CUSTOM_KEY=user-value" in content
+    assert "ANOTHER_UNRELATED=please-keep-me" in content
+
+
+def test_parse_env_file_round_trip(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "# comment line\n\nFOO=bar\nBAZ=qux=with=equals\n# trailing comment\n",
+        encoding="utf-8",
+    )
+    parsed = _parse_env_file(env_file)
+    assert parsed == {"FOO": "bar", "BAZ": "qux=with=equals"}
+
+
+def test_update_resolution_preserves_existing_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_root = tmp_path / "repo"
+    _setup_repo(repo_root)
+
+    env_file = repo_root / ".env"
+    env_file.write_text(
+        "CLAUDE_CODE_OAUTH_TOKEN=preserved-token\n"
+        "HYACINE_GRAPH_TENANT_ID=preserved-tenant\n"
+        "USER_CUSTOM_KEY=keep-this-too\n",
+        encoding="utf-8",
+    )
+
+    answers_blank_secrets = [
+        "Alice", "PM at Acme", "Focus.", "",
+        "Direct reports", "",
+        "a",
+        "alice@example.com", "UTC", "en", "07:30",
+        "common",
+        "", "",
+    ]
+
+    monkeypatch.setattr("getpass.getpass", lambda _prompt="": "")
+    # Accept 'update' for .env, overwrite-without-backup semantics via 'b' for others
+    # would require a backup; simplest: skip-all for non-.env by answering 'u' then 's'
+    # Actually only .env exists, so only one prompt.
+    monkeypatch.setattr(
+        builtins, "input",
+        _answer_sequence(["u"] + answers_blank_secrets),
+    )
+
+    rc = run_init(["--repo-root", str(repo_root)])
+    assert rc == 0
+
+    content = env_file.read_text(encoding="utf-8")
+    assert "CLAUDE_CODE_OAUTH_TOKEN=preserved-token" in content
+    assert "HYACINE_GRAPH_TENANT_ID=common" in content
+    assert "USER_CUSTOM_KEY=keep-this-too" in content
 
 
 # ---------------------------------------------------------------------------

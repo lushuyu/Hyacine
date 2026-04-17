@@ -92,21 +92,38 @@ def get_engine(db_path: Path) -> Engine:
 
 
 def _migrate_legacy_file(db_path: Path) -> None:
-    """If legacy ./data/briefing.db exists and the target doesn't, move it."""
+    """If legacy ./data/briefing.db exists and the target doesn't, move it.
+
+    Safe under concurrent startup (web + run service): if another process
+    renamed the file between our exists() check and our rename() call, we
+    swallow the error and let the other caller finish the migration.
+    """
     if db_path.exists():
         return
     legacy = db_path.parent / "briefing.db"
     if not legacy.exists():
         return
-    legacy.rename(db_path)
+    try:
+        legacy.rename(db_path)
+    except (FileNotFoundError, OSError):
+        return
     for suffix in ("-shm", "-wal"):
         src = legacy.with_name(legacy.name + suffix)
-        if src.exists():
-            src.rename(db_path.with_name(db_path.name + suffix))
+        dst = db_path.with_name(db_path.name + suffix)
+        try:
+            if src.exists():
+                src.rename(dst)
+        except (FileNotFoundError, OSError):
+            continue
 
 
 def _migrate_legacy_schema(db_path: Path) -> None:
-    """Rename briefing_runs→runs and briefing_markdown→markdown, in place."""
+    """Rename briefing_runs→runs and briefing_markdown→markdown, in place.
+
+    ALTER TABLE rename is not guarded by the sqlite_master snapshot under
+    concurrent startup, so we catch OperationalError and treat "already
+    migrated" as a no-op.
+    """
     if not db_path.exists():
         return
     with sqlite3.connect(db_path) as conn:
@@ -116,15 +133,20 @@ def _migrate_legacy_schema(db_path: Path) -> None:
             )
         }
         if "briefing_runs" in tables and "runs" not in tables:
-            conn.execute("ALTER TABLE briefing_runs RENAME TO runs")
-            tables.discard("briefing_runs")
-            tables.add("runs")
-        if "runs" in tables:
-            cols = {r[1] for r in conn.execute("PRAGMA table_info(runs)")}
-            if "briefing_markdown" in cols and "markdown" not in cols:
+            try:
+                conn.execute("ALTER TABLE briefing_runs RENAME TO runs")
+            except sqlite3.OperationalError:
+                pass
+        cols = {
+            r[1] for r in conn.execute("PRAGMA table_info(runs)")
+        }
+        if cols and "briefing_markdown" in cols and "markdown" not in cols:
+            try:
                 conn.execute(
                     "ALTER TABLE runs RENAME COLUMN briefing_markdown TO markdown"
                 )
+            except sqlite3.OperationalError:
+                pass
         conn.commit()
 
 

@@ -5,10 +5,11 @@ Entry point: ``python -m hyacine init [--overwrite] [--no-prompt-token]``
 Flow:
   1. Resolve in-repo config / prompt / data dirs.
   2. Ensure directories exist.
-  3. Idempotency check on each target file.
+  3. Idempotency check on each target file (update / backup+overwrite / skip).
   4. Collect answers from the user.
   5. Render prompts/hyacine.md from Jinja2 template.
-  6. Write config.yaml, rules.yaml, and append secrets to .env.
+  6. Write config.yaml, rules.yaml, and .env (update mode merges .env:
+     blank answers keep existing values, unknown keys are preserved).
   7. Print summary + next steps.
 """
 from __future__ import annotations
@@ -315,13 +316,49 @@ def _build_config_yaml(answers: dict[str, object]) -> str:
     return yaml.dump(data, default_flow_style=False, allow_unicode=True)
 
 
-def _build_env_file(answers: dict[str, object]) -> str:
-    lines = [
-        f"CLAUDE_CODE_OAUTH_TOKEN={answers.get('oauth_token', '')}",
-        f"HYACINE_GRAPH_TENANT_ID={answers.get('graph_tenant_id', 'common')}",
-        f"HYACINE_NTFY_TOPIC={answers.get('ntfy_topic', '')}",
-        f"HYACINE_HEALTHCHECKS_UUID={answers.get('healthchecks_uuid', '')}",
-    ]
+_MANAGED_ENV_KEYS = (
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "HYACINE_GRAPH_TENANT_ID",
+    "HYACINE_NTFY_TOPIC",
+    "HYACINE_HEALTHCHECKS_UUID",
+)
+
+
+def _parse_env_file(path: Path) -> dict[str, str]:
+    result: dict[str, str] = {}
+    if not path.exists():
+        return result
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        result[key.strip()] = value
+    return result
+
+
+def _build_env_file(
+    answers: dict[str, object],
+    existing: dict[str, str] | None = None,
+) -> str:
+    # In update mode, blank wizard answers keep whatever was already in .env,
+    # and any keys the wizard doesn't manage are preserved at the end.
+    values: dict[str, str] = {
+        "CLAUDE_CODE_OAUTH_TOKEN": str(answers.get("oauth_token", "")),
+        "HYACINE_GRAPH_TENANT_ID": str(answers.get("graph_tenant_id", "common")),
+        "HYACINE_NTFY_TOPIC": str(answers.get("ntfy_topic", "")),
+        "HYACINE_HEALTHCHECKS_UUID": str(answers.get("healthchecks_uuid", "")),
+    }
+    if existing:
+        for key in _MANAGED_ENV_KEYS:
+            if not values[key] and existing.get(key):
+                values[key] = existing[key]
+
+    lines = [f"{k}={values[k]}" for k in _MANAGED_ENV_KEYS]
+    if existing:
+        for key, val in existing.items():
+            if key not in _MANAGED_ENV_KEYS:
+                lines.append(f"{key}={val}")
     return "\n".join(lines) + "\n"
 
 
@@ -402,7 +439,13 @@ def run_init(argv: list[str] | None = None) -> int:  # noqa: C901
 
     prompt_content = _render_prompt(answers, repo_root)
     config_content = _build_config_yaml(answers)
-    env_content = _build_env_file(answers)
+
+    existing_env = (
+        _parse_env_file(env_file)
+        if resolutions.get(str(env_file)) == RESOLUTION_UPDATE
+        else None
+    )
+    env_content = _build_env_file(answers, existing=existing_env)
 
     written: list[Path] = []
 
