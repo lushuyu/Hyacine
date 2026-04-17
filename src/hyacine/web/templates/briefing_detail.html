@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Briefing · Run {{ run.id }}{% endblock %}
+{% block content %}
+<h1>Run {{ run.id }} — <span class="status-{{ run.status }}">{{ run.status }}</span></h1>
+<p>
+<strong>Started:</strong> {{ run.started_at }}<br>
+<strong>Finished:</strong> {{ run.finished_at or "—" }}<br>
+<strong>Window:</strong> {{ run.window_from }} → {{ run.window_to }}<br>
+<strong>Emails:</strong> {{ run.email_count }}<br>
+<strong>HC ping:</strong> {{ run.hc_ping_result }}
+</p>
+
+{% if run.briefing_markdown %}
+<h2>Rendered briefing</h2>
+<div>{{ rendered_html | safe }}</div>
+<details><summary>Raw markdown</summary><pre>{{ run.briefing_markdown }}</pre></details>
+{% endif %}
+
+{% if run.error_traceback %}
+<h2>Error</h2>
+<pre>{{ run.error_traceback }}</pre>
+{% endif %}
+{% endblock %}

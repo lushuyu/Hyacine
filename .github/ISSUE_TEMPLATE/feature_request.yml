@@ -1,0 +1,44 @@
+name: Feature Request
+description: Suggest a new feature or enhancement
+title: "[FEATURE] "
+labels: ["feature", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting a feature! Please fill in the details below.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Is your feature request related to a problem? Describe it.
+      placeholder: "I'm frustrated when..."
+    validations:
+      required: true
+  - type: textarea
+    id: proposed-solution
+    attributes:
+      label: Proposed solution
+      description: Describe the solution you'd like.
+      placeholder: Describe your proposed solution...
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Describe any alternative solutions or features you've considered.
+      placeholder: What alternatives did you consider?
+    validations:
+      required: false
+  - type: dropdown
+    id: contribute
+    attributes:
+      label: Would you contribute a PR?
+      options:
+        - "Yes, I'd like to contribute a PR"
+        - "Maybe, depending on complexity"
+        - "No, but I'd test it"
+        - "No"
+    validations:
+      required: true

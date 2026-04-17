@@ -1,0 +1,94 @@
+name: Bug Report
+description: File a bug report
+title: "[BUG] "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to fill out this bug report!
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear and concise description of what the bug is.
+      placeholder: Describe the bug...
+    validations:
+      required: true
+  - type: textarea
+    id: steps-to-reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Steps to reproduce the behavior.
+      placeholder: |
+        1. Run `python -m hyacine init`
+        2. ...
+        3. See error
+    validations:
+      required: true
+  - type: textarea
+    id: expected-behavior
+    attributes:
+      label: Expected behavior
+      description: What you expected to happen.
+      placeholder: Describe what you expected...
+    validations:
+      required: true
+  - type: textarea
+    id: actual-behavior
+    attributes:
+      label: Actual behavior
+      description: What actually happened.
+      placeholder: Describe what actually happened...
+    validations:
+      required: true
+  - type: dropdown
+    id: python-version
+    attributes:
+      label: Python version
+      options:
+        - "3.11"
+        - "3.12"
+        - Other (specify in additional context)
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Ubuntu / Debian
+        - Fedora / RHEL / CentOS
+        - Arch Linux
+        - Other Linux
+        - macOS (unsupported)
+        - Windows (unsupported)
+    validations:
+      required: true
+  - type: dropdown
+    id: wizard-run
+    attributes:
+      label: Was the wizard run (`python -m hyacine init`) before the error?
+      options:
+        - "Yes"
+        - "No"
+        - "Not applicable"
+    validations:
+      required: true
+  - type: textarea
+    id: doctor-output
+    attributes:
+      label: Doctor output
+      description: Paste the output of `python scripts/doctor.py` if available.
+      placeholder: |
+        $ python scripts/doctor.py
+        ...
+      render: text
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Paste a relevant excerpt from `~/.local/state/hyacine/logs/` or terminal output.
+      placeholder: |
+        Paste log lines here...
+      render: text

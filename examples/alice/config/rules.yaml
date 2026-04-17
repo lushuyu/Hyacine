@@ -1,0 +1,50 @@
+# Alice's classification rules. Flavour: her direct reports, Acme Robotics infra,
+# GitHub / JIRA notifications, and a long tail of marketing.
+rules:
+  - name: vp-of-product
+    sender_email: priya.vp@acme.example.com
+    category: advisor
+
+  - name: direct-reports
+    subject_regex: '^(1:1|status|review):'
+    category: advisor
+
+  - name: action-required
+    subject_regex: '(urgent|action required|please respond|approval needed)'
+    category: advisor
+
+  - name: meeting-invites
+    subject_regex: '^(invitation|meeting|calendar):'
+    category: grad_school
+
+  - name: github
+    sender_domain: github.com
+    category: cfp
+
+  - name: github-noreply
+    sender_email: noreply@github.com
+    category: cfp
+
+  - name: jira
+    sender_domain: atlassian.net
+    category: canvas
+
+  - name: acme-internal
+    sender_domain: acme.example.com
+    category: admin
+
+  - name: receipts
+    subject_regex: '(receipt|invoice|payment confirmation)'
+    category: admin
+
+  - name: newsletters
+    subject_regex: '(newsletter|digest|weekly update|monthly update)'
+    category: newsletter
+
+  - name: marketing-noreply
+    sender_email: noreply@
+    category: newsletter
+
+  - name: scholar-alerts
+    sender_domain: scholar.google.com
+    category: scholar

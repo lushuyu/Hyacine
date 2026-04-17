@@ -1,0 +1,65 @@
+[project]
+name = "hyacine"
+version = "0.1.0"
+description = "Daily Outlook-to-Claude email briefing system"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "azure-identity>=1.19,<2",
+    "msgraph-sdk>=1.0,<2",
+    "fastapi>=0.115,<1",
+    "uvicorn[standard]>=0.30,<1",
+    "jinja2>=3.1",
+    "python-multipart>=0.0.9",
+    "sqlalchemy>=2.0,<3",
+    "pydantic>=2.9,<3",
+    "pydantic-settings>=2.4",
+    "pyyaml>=6.0",
+    "markdown>=3.5",
+    "bleach>=6.1",
+    "httpx>=0.27",
+    "python-dateutil>=2.9",
+]
+
+[project.scripts]
+hyacine = "hyacine.__main__:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "types-PyYAML",
+    "types-bleach",
+    "types-Markdown",
+    "types-python-dateutil",
+    "pre-commit>=3.8",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/hyacine"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = false
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
+check_untyped_defs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

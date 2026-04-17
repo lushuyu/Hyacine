@@ -1,0 +1,30 @@
+# systemd user service — one-shot daily briefing run, triggered by .timer.
+# Install: ~/.config/systemd/user/hyacine-run.service
+
+[Unit]
+Description=Hyacine pipeline run
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/hyacine
+EnvironmentFile=%h/.config/hyacine/hyacine.env
+UnsetEnvironment=ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN
+# No Restart= on oneshot — the timer's Persistent=true handles missed runs.
+ExecStart=%h/briefing/.venv/bin/python -m hyacine.pipeline.briefing
+
+# Same hardening profile as the web unit.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.config/hyacine %h/.local/state/hyacine
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native

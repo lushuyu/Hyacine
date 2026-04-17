@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Briefing · Dashboard{% endblock %}
+{% block content %}
+<h1>Recent runs</h1>
+<button hx-post="/actions/run" hx-swap="outerHTML">Run now</button>
+<table>
+<thead><tr><th>Started</th><th>Status</th><th>Window</th><th>Emails</th><th></th></tr></thead>
+<tbody>
+{% for run in runs %}
+<tr>
+<td>{{ run.started_at }}</td>
+<td class="status-{{ run.status }}">{{ run.status }}</td>
+<td>{{ run.window_from }} → {{ run.window_to }}</td>
+<td>{{ run.email_count }}</td>
+<td><a href="/briefings/{{ run.id }}">open</a></td>
+</tr>
+{% else %}
+<tr><td colspan="5"><em>No runs yet.</em></td></tr>
+{% endfor %}
+</tbody>
+</table>
+{% endblock %}

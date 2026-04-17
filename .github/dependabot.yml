@@ -1,0 +1,17 @@
+# Dependabot configuration
+# Note: `package-ecosystem: uv` is not yet supported by Dependabot as of 2024.
+# Using `pip` as a fallback so Dependabot can still track Python dependencies
+# via the uv.lock / requirements. Upgrade to `uv` once GitHub adds support.
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"

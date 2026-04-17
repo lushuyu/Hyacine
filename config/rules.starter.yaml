@@ -1,0 +1,79 @@
+# config/rules.starter.yaml
+# Generic starter rules — copy to ~/.config/hyacine/rules.yaml and customise.
+# Or run `python -m hyacine init` which copies this file automatically.
+#
+# Rules are evaluated top-to-bottom; the FIRST match wins.
+# Each rule must have a `name`, a `category`, and at least one matcher:
+#   sender_domain:  substring match against the lowercased sender email domain
+#   sender_email:   exact match (case-insensitive) — supports prefix with "@"
+#   subject_regex:  Python re.search pattern, case-insensitive
+# A rule with multiple matchers requires ALL matchers to match.
+#
+# Built-in categories: advisor | priority | action_required | meeting |
+#   calendar | github | ci | newsletter | marketing | receipt | review | other
+
+rules:
+  # --- High-priority senders ---
+  - name: advisor-or-manager
+    subject_regex: '(urgent|action required|please review|approval needed)'
+    category: priority
+
+  - name: priority-direct-report
+    sender_email: ""           # fill in: e.g. manager@example.com
+    category: priority
+
+  # --- Action-required ---
+  - name: action-required-subject
+    subject_regex: '\b(action required|response needed|deadline|due today|overdue)\b'
+    category: action_required
+
+  # --- Meeting invites ---
+  - name: meeting-invite
+    subject_regex: '(meeting invite|calendar invite|you''re invited|join us for)'
+    category: meeting
+
+  - name: calendar-event
+    subject_regex: '\b(accepted|declined|tentative|updated invitation|cancelled event)\b'
+    category: calendar
+
+  # --- GitHub notifications ---
+  - name: github-notifications
+    sender_domain: github.com
+    category: github
+
+  - name: github-noreply
+    sender_domain: noreply.github.com
+    category: github
+
+  # --- CI / CD alerts ---
+  - name: ci-failure
+    subject_regex: '\b(build failed|pipeline failed|test failed|deployment failed)\b'
+    category: ci
+
+  # --- Newsletters & digests ---
+  - name: newsletter-subject
+    subject_regex: '(newsletter|weekly digest|monthly digest|weekly update|roundup)'
+    category: newsletter
+
+  - name: newsletter-unsubscribe
+    subject_regex: 'unsubscribe'
+    category: newsletter
+
+  # --- Marketing ---
+  - name: marketing-noreply
+    sender_email: noreply@
+    category: marketing
+
+  - name: marketing-promo
+    subject_regex: '\b(sale|% off|discount|promo|deal|offer|coupon|limited time)\b'
+    category: marketing
+
+  # --- Receipts & billing ---
+  - name: receipt-or-invoice
+    subject_regex: '\b(receipt|invoice|order confirmation|payment confirmation|billing statement)\b'
+    category: receipt
+
+  # --- Review requests ---
+  - name: review-invite
+    subject_regex: '\b(please review|review requested|pull request|code review)\b'
+    category: review

@@ -1,0 +1,9 @@
+# Alice's config — what the wizard writes for her answers.
+recipient_email: alice@example.com
+timezone: America/Los_Angeles
+language: en
+llm_model: sonnet
+run_time: "07:30"
+llm_timeout_seconds: 300
+fetch_max_emails: 500
+initial_watermark_lookback_hours: 24

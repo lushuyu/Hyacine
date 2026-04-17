@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}Briefing · Rules{% endblock %}
+{% block content %}
+<h1>Classification rules</h1>
+{% if error %}<p style="color:#dc3545"><strong>Validation error:</strong> {{ error }}</p>{% endif %}
+<form method="post" action="/rules">
+<textarea name="content" rows="30">{{ content }}</textarea>
+<br>
+<button type="submit">Save (creates snapshot)</button>
+</form>
+{% endblock %}

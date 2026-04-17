@@ -1,0 +1,40 @@
+# systemd user service — Web UI (FastAPI via uvicorn), single worker.
+# Install: ~/.config/systemd/user/hyacine-web.service
+# Enable:  systemctl --user daemon-reload && systemctl --user enable --now hyacine-web.service
+# Linger:  loginctl enable-linger <user>   (so it survives ssh logout)
+
+[Unit]
+Description=Hyacine web UI (FastAPI)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/hyacine
+EnvironmentFile=%h/.config/hyacine/hyacine.env
+# Belt-and-suspenders: make sure API-key vars can NEVER leak into the Claude
+# Code subprocess from an inherited env.
+UnsetEnvironment=ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN
+# --workers 1 is required: multi-worker breaks SQLite single-writer invariant.
+ExecStart=%h/briefing/.venv/bin/uvicorn briefing.web.app:app --host 127.0.0.1 --port 8765 --workers 1
+Restart=on-failure
+RestartSec=5s
+
+# Hardening (see systemd.exec(5)); generous enough to still run subprocesses
+# (`systemctl --user start hyacine-run.service` from the UI).
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.config/hyacine %h/.local/state/hyacine
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=default.target
