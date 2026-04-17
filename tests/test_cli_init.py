@@ -167,6 +167,32 @@ def test_parse_env_file_round_trip(tmp_path: Path) -> None:
     assert parsed == {"FOO": "bar", "BAZ": "qux=with=equals"}
 
 
+def test_parse_env_file_handles_dotenv_grammar(tmp_path: Path) -> None:
+    """Covers export prefix, quoting, and inline-comment edge cases."""
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join([
+            "export EXPORTED=yes",
+            'QUOTED_DOUBLE="value with spaces"',
+            "QUOTED_SINGLE='raw $value'",
+            "WITH_INLINE=clean # trailing comment",
+            "HASH_IN_QUOTES=\"foo#bar\"",
+            "",
+        ]),
+        encoding="utf-8",
+    )
+    parsed = _parse_env_file(env_file)
+    assert parsed["EXPORTED"] == "yes"
+    assert parsed["QUOTED_DOUBLE"] == "value with spaces"
+    assert parsed["QUOTED_SINGLE"] == "raw $value"
+    assert parsed["WITH_INLINE"] == "clean"
+    assert parsed["HASH_IN_QUOTES"] == "foo#bar"
+
+
+def test_parse_env_file_missing_returns_empty(tmp_path: Path) -> None:
+    assert _parse_env_file(tmp_path / "does-not-exist.env") == {}
+
+
 def test_update_resolution_preserves_existing_env(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

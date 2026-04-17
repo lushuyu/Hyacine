@@ -325,16 +325,18 @@ _MANAGED_ENV_KEYS = (
 
 
 def _parse_env_file(path: Path) -> dict[str, str]:
-    result: dict[str, str] = {}
+    """Parse a dotenv file with the same grammar pydantic-settings uses.
+
+    Delegates to python-dotenv (a transitive dep via pydantic-settings), so
+    `export KEY=val`, quoted values, inline `# comment` tails, and escape
+    sequences are handled identically to how the runtime loader reads the
+    file — guaranteeing merge mode doesn't misparse existing entries.
+    """
     if not path.exists():
-        return result
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        result[key.strip()] = value
-    return result
+        return {}
+    from dotenv import dotenv_values  # noqa: PLC0415
+
+    return {k: v for k, v in dotenv_values(path).items() if v is not None}
 
 
 def _build_env_file(
