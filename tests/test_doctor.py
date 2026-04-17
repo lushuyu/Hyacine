@@ -78,6 +78,17 @@ def test_oauth_token_valid(monkeypatch: pytest.MonkeyPatch) -> None:
     assert status == PASS
 
 
+def test_oauth_token_missing_reports_env_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When env_file is passed, the FAIL detail must mention that resolved path."""
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    env_file = tmp_path / "custom" / ".env"
+    status, _label, detail = check_oauth_token(env_file)
+    assert status == FAIL
+    assert str(env_file) in detail
+
+
 # ---------------------------------------------------------------------------
 # check_conflicting_keys
 # ---------------------------------------------------------------------------

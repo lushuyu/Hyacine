@@ -54,11 +54,12 @@ def check_env_file(env_file: Path) -> Check:
     return PASS, label, ""
 
 
-def check_oauth_token() -> Check:
+def check_oauth_token(env_file: Path | None = None) -> Check:
     label = "CLAUDE_CODE_OAUTH_TOKEN is set and not a placeholder"
     token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "")
     if not token:
-        return FAIL, label, "Not set — add to ./.env"
+        target = str(env_file) if env_file is not None else ".env"
+        return FAIL, label, f"Not set — add CLAUDE_CODE_OAUTH_TOKEN=... to {target}"
     if "replace" in token.lower() or token.startswith("sk-") and len(token) < 20:
         return FAIL, label, "Token looks like a placeholder"
     return PASS, label, ""
@@ -177,13 +178,17 @@ def check_systemctl() -> Check:
 
 def run_checks() -> int:
     """Run all checks. Returns exit code (0/1/2)."""
-    from hyacine.config import Settings  # noqa: PLC0415
+    from hyacine.config import Settings, _default_repo_root  # noqa: PLC0415
 
     settings = Settings()
+    # Anchor the .env path at the same repo root Settings uses (respecting
+    # HYACINE_REPO_ROOT), so `python scripts/doctor.py` from any CWD looks
+    # at the same file the runtime will actually read.
+    env_file = _default_repo_root() / ".env"
 
     checks: list[Check] = [
-        check_env_file(Path(".env").resolve()),
-        check_oauth_token(),
+        check_env_file(env_file),
+        check_oauth_token(env_file),
         check_conflicting_keys(),
         check_config_yaml(settings.config_path),
         check_rules_yaml(settings.rules_path),
