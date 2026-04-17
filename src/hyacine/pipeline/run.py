@@ -18,9 +18,9 @@ import zoneinfo
 from datetime import UTC, datetime, timedelta
 
 from hyacine.config import Settings, YamlConfig, load_yaml_config
-from hyacine.db import BriefingRun, Watermark, init_db, session_scope
+from hyacine.db import Run, Watermark, init_db, session_scope
 from hyacine.llm.claude_code import summarize
-from hyacine.models import BriefingRunRecord, FetchResult, RunStatus
+from hyacine.models import FetchResult, RunRecord, RunStatus
 
 # Module-level settings singletons — overridable for tests via monkeypatch
 _settings: Settings | None = None
@@ -54,15 +54,12 @@ def read_watermark() -> datetime:
         row = session.get(Watermark, _WATERMARK_KEY)
         if row is not None:
             dt = datetime.fromisoformat(row.value)
-            # Ensure timezone-aware UTC
             if dt.tzinfo is None:
                 dt = dt.replace(tzinfo=UTC)
             return dt
 
-    # First run: backfill and persist
     backfill = datetime.now(UTC) - timedelta(hours=cfg.initial_watermark_lookback_hours)
     with session_scope(settings.db_path, write=True) as session:
-        # Check again inside write transaction
         row = session.get(Watermark, _WATERMARK_KEY)
         if row is None:
             session.add(
@@ -94,14 +91,14 @@ def advance_watermark(new_value_utc: datetime) -> None:
             row.updated_at = now
 
 
-def run_briefing(now_utc: datetime | None = None) -> BriefingRunRecord:
+def run_pipeline(now_utc: datetime | None = None) -> RunRecord:
     """Run one full pipeline iteration.
 
     `now_utc` override is for tests; production path passes None.
     """
     from hyacine.graph.auth import load_or_create_record
     from hyacine.graph.fetch import fetch_calendar, fetch_emails
-    from hyacine.graph.send import send_briefing_email
+    from hyacine.graph.send import send_email
     from hyacine.pipeline.rules import RuleSet, load_rules
 
     settings = _get_settings()
@@ -121,9 +118,8 @@ def run_briefing(now_utc: datetime | None = None) -> BriefingRunRecord:
 
     watermark = read_watermark()
 
-    # Insert a running row
     with session_scope(settings.db_path, write=True) as session:
-        run_row = BriefingRun(
+        run_row = Run(
             started_at=now_utc,
             finished_at=None,
             status=RunStatus.RUNNING,
@@ -135,19 +131,18 @@ def run_briefing(now_utc: datetime | None = None) -> BriefingRunRecord:
         session.flush()
         run_id = run_row.id
 
-    # Helper to update the run row
     def _update_row(**kwargs: object) -> None:
         with session_scope(settings.db_path, write=True) as s:
-            row = s.get(BriefingRun, run_id)
+            row = s.get(Run, run_id)
             if row is not None:
                 for k, v in kwargs.items():
                     setattr(row, k, v)
 
-    def _load_record() -> BriefingRunRecord:
+    def _load_record() -> RunRecord:
         with session_scope(settings.db_path) as s:
-            row = s.get(BriefingRun, run_id)
+            row = s.get(Run, run_id)
             assert row is not None
-            return BriefingRunRecord(
+            return RunRecord(
                 id=row.id,
                 started_at=_ensure_utc(row.started_at),
                 finished_at=_ensure_utc(row.finished_at) if row.finished_at else None,
@@ -155,12 +150,11 @@ def run_briefing(now_utc: datetime | None = None) -> BriefingRunRecord:
                 window_from=_ensure_utc(row.window_from),
                 window_to=_ensure_utc(row.window_to),
                 email_count=row.email_count,
-                briefing_markdown=row.briefing_markdown,
+                markdown=row.markdown,
                 error_traceback=row.error_traceback,
                 sent_message_id=row.sent_message_id,
             )
 
-    # Ping healthchecks start — swallow any errors
     try:
         from hyacine.ops.monitoring import ping_healthchecks
         ping_healthchecks(settings.healthchecks_uuid, "start", "")
@@ -200,12 +194,10 @@ def run_briefing(now_utc: datetime | None = None) -> BriefingRunRecord:
             pass
         return _load_record()
 
-    # Apply rules classifier
     ruleset: RuleSet | None = None
     try:
         ruleset = load_rules(settings.rules_path)
     except Exception:
-        # If rules fail to load, leave category_hint as OTHER
         pass
 
     for email in emails:
@@ -246,9 +238,9 @@ def run_briefing(now_utc: datetime | None = None) -> BriefingRunRecord:
         return _load_record()
 
     # --- Phase 3: Send ---
-    subject = f"【每日晨报】{now_local.strftime('%Y-%m-%d')}"
+    subject = f"Hyacine · {now_local.strftime('%Y-%m-%d')}"
     try:
-        sent_message_id = send_briefing_email(
+        sent_message_id = send_email(
             cred,
             cfg.recipient_email,
             subject,
@@ -261,7 +253,7 @@ def run_briefing(now_utc: datetime | None = None) -> BriefingRunRecord:
             status=RunStatus.FAILED,
             finished_at=datetime.now(UTC),
             email_count=len(emails),
-            briefing_markdown=markdown,
+            markdown=markdown,
             error_traceback=tb,
         )
         try:
@@ -278,7 +270,7 @@ def run_briefing(now_utc: datetime | None = None) -> BriefingRunRecord:
         status=RunStatus.SUCCESS,
         finished_at=datetime.now(UTC),
         email_count=len(emails),
-        briefing_markdown=markdown,
+        markdown=markdown,
         sent_message_id=sent_message_id,
     )
 
@@ -288,7 +280,6 @@ def run_briefing(now_utc: datetime | None = None) -> BriefingRunRecord:
     except Exception:
         pass
 
-    # Suppress unused variable warnings
     _ = fetch_error, llm_error, send_error
 
     return _load_record()
@@ -301,19 +292,18 @@ def _ensure_utc(dt: datetime) -> datetime:
 
 
 def main() -> int:
-    """CLI entry: `python -m hyacine.pipeline.briefing`."""
+    """CLI entry: `python -m hyacine.pipeline.run` or `python -m hyacine run`."""
     try:
-        record = run_briefing()
+        record = run_pipeline()
         if record.status == RunStatus.SUCCESS:
             print(f"OK: sent={record.sent_message_id} emails={record.email_count}")
             return 0
-        else:
-            err_class = "PipelineError"
-            if record.error_traceback:
-                first_line = record.error_traceback.strip().splitlines()[-1]
-                err_class = first_line
-            print(f"FAIL: {err_class}")
-            return 1
+        err_class = "PipelineError"
+        if record.error_traceback:
+            first_line = record.error_traceback.strip().splitlines()[-1]
+            err_class = first_line
+        print(f"FAIL: {err_class}")
+        return 1
     except Exception as exc:
         print(f"FAIL: {exc.__class__.__name__}")
         return 1

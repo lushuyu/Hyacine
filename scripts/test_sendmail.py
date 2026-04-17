@@ -1,6 +1,6 @@
 """Send one test email to verify the Mail.Send scope + /me/sendMail path.
 
-Subject: [TEST] Briefing sendmail verify
+Subject: [TEST] Hyacine sendmail verify
 Body:    minimal HTML with timestamp.
 
 Only proceed after explicit interactive confirmation; this script REQUIRES
@@ -28,7 +28,7 @@ def main() -> int:
     try:
         from hyacine.config import Settings, load_yaml_config
         from hyacine.graph.auth import load_or_create_record
-        from hyacine.graph.send import send_briefing_email
+        from hyacine.graph.send import send_email
     except ImportError as exc:
         print(f"Import error: {exc}", file=sys.stderr)
         return 1
@@ -66,11 +66,11 @@ def main() -> int:
             return 2
 
     utc_now_iso = datetime.now(tz=UTC).isoformat()
-    subject = "[TEST] Briefing sendmail verify"
+    subject = "[TEST] Hyacine sendmail verify"
     body = f"This is an automated Graph sendMail verification sent at {utc_now_iso}."
 
     try:
-        msg_id = send_briefing_email(_cred, recipient, subject, body)
+        msg_id = send_email(_cred, recipient, subject, body)
     except Exception as exc:  # noqa: BLE001
         print(f"sendMail failed: {exc}", file=sys.stderr)
         return 1

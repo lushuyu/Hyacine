@@ -1,4 +1,4 @@
-"""Send the briefing via POST /me/sendMail."""
+"""Send a hyacine report via POST /me/sendMail."""
 from __future__ import annotations
 
 import re
@@ -59,7 +59,7 @@ def render_html_body(markdown_text: str) -> str:
     )
 
 
-def send_briefing_email(
+def send_email(
     cred: DeviceCodeCredential,
     recipient: str,
     subject: str,
@@ -111,4 +111,4 @@ def send_briefing_email(
     return request_id if request_id else f"sendmail-{uuid.uuid4()}"
 
 
-__all__ = ["send_briefing_email", "render_html_body"]
+__all__ = ["send_email", "render_html_body"]

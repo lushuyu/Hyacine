@@ -17,7 +17,7 @@ from fastapi.templating import Jinja2Templates
 
 from hyacine.config import get_settings
 from hyacine.db import init_db
-from hyacine.web.routes import actions, briefings, dashboard, prompt, rules
+from hyacine.web.routes import actions, dashboard, prompt, rules, runs
 
 
 def create_app(templates_dir: Path | None = None) -> FastAPI:
@@ -44,7 +44,7 @@ def create_app(templates_dir: Path | None = None) -> FastAPI:
 
     # Include routers.
     app.include_router(dashboard.router)
-    app.include_router(briefings.router)
+    app.include_router(runs.router)
     app.include_router(actions.router)
     app.include_router(prompt.router)
     app.include_router(rules.router)

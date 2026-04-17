@@ -16,11 +16,10 @@ htmlcov/
 
 data/
 !data/.gitkeep
-~/.local/share/hyacine/
 
 config/config.yaml
 config/rules.yaml
-prompts/briefing.md
+prompts/hyacine.md
 
 .omc/
 .claude/

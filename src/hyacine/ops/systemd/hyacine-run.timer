@@ -11,8 +11,8 @@ Description=Daily trigger for hyacine-run.service
 
 [Timer]
 # Fires at 07:30 local system time. Adjust to match your timezone and run_time
-# setting in ~/.config/hyacine/config.yaml. Re-run `python -m hyacine init`
-# after changing run_time to regenerate this file with the correct value.
+# setting in ./config/config.yaml. Re-run `python -m hyacine init` after
+# changing run_time to regenerate this file with the correct value.
 OnCalendar=*-*-* 07:30:00
 # If the host was off at 07:30, fire on next start. Critical for laptops/WSL.
 Persistent=true

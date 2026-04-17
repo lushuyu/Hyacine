@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Briefing · Dashboard{% endblock %}
+{% block title %}Hyacine · Dashboard{% endblock %}
 {% block content %}
 <h1>Recent runs</h1>
 <button hx-post="/actions/run" hx-swap="outerHTML">Run now</button>
@@ -12,7 +12,7 @@
 <td class="status-{{ run.status }}">{{ run.status }}</td>
 <td>{{ run.window_from }} → {{ run.window_to }}</td>
 <td>{{ run.email_count }}</td>
-<td><a href="/briefings/{{ run.id }}">open</a></td>
+<td><a href="/runs/{{ run.id }}">open</a></td>
 </tr>
 {% else %}
 <tr><td colspan="5"><em>No runs yet.</em></td></tr>

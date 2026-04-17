@@ -11,20 +11,13 @@ from sqlalchemy import select
 
 import hyacine.db as db_module
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 def _utcnow() -> datetime:
     return datetime.now(tz=UTC).replace(tzinfo=None)
 
 
 def _make_app(tmp_path: Path) -> TestClient:
-    """
-    Create a fresh app pointed at tmp_path, resetting the global engine cache
-    so each test gets its own SQLite DB.
-    """
-    # Reset the global SQLAlchemy engine so each test starts fresh.
+    """Create a fresh app pointed at tmp_path, resetting the global engine cache."""
     db_module._engine = None
     db_module._SessionFactory = None
 
@@ -39,35 +32,31 @@ def _make_app(tmp_path: Path) -> TestClient:
     import importlib  # noqa: PLC0415
     import os  # noqa: PLC0415
 
-    # Patch settings via env vars before importing create_app.
     os.environ["HYACINE_DB_PATH"] = str(db_path)
     os.environ["HYACINE_PROMPT_PATH"] = str(prompt_path)
     os.environ["HYACINE_RULES_PATH"] = str(rules_path)
     os.environ["HYACINE_CONFIG_PATH"] = str(config_path)
 
-    # Re-import settings to pick up new env.
     import hyacine.config as cfg_mod  # noqa: PLC0415
 
     importlib.reload(cfg_mod)
 
-    # Also reload web modules so they pick up fresh settings.
     import hyacine.web.utils as utils_mod  # noqa: PLC0415
 
     importlib.reload(utils_mod)
 
     import hyacine.web.routes.actions as act_mod  # noqa: PLC0415
-    import hyacine.web.routes.briefings as br_mod  # noqa: PLC0415
     import hyacine.web.routes.dashboard as dash_mod  # noqa: PLC0415
     import hyacine.web.routes.prompt as pr_mod  # noqa: PLC0415
     import hyacine.web.routes.rules as rl_mod  # noqa: PLC0415
+    import hyacine.web.routes.runs as runs_mod  # noqa: PLC0415
 
     importlib.reload(dash_mod)
-    importlib.reload(br_mod)
+    importlib.reload(runs_mod)
     importlib.reload(act_mod)
     importlib.reload(pr_mod)
     importlib.reload(rl_mod)
 
-    # Reload app factory last.
     import hyacine.web.app as app_mod  # noqa: PLC0415
 
     importlib.reload(app_mod)
@@ -75,7 +64,6 @@ def _make_app(tmp_path: Path) -> TestClient:
     templates_dir = Path(__file__).parent.parent / "src" / "hyacine" / "web" / "templates"
     app = app_mod.create_app(templates_dir=templates_dir)
 
-    # Manually init DB (lifespan won't run in TestClient by default without context manager).
     db_module.init_db(db_path)
 
     return TestClient(app, raise_server_exceptions=True)
@@ -110,7 +98,7 @@ def test_dashboard_lists_runs(client_with_db: tuple[TestClient, Path]) -> None:
     tc, db_path = client_with_db
 
     with db_module.session_scope(db_path, write=True) as session:
-        session.add(db_module.BriefingRun(
+        session.add(db_module.Run(
             started_at=datetime(2024, 1, 15, 8, 0, 0),
             finished_at=datetime(2024, 1, 15, 8, 1, 0),
             status="success",
@@ -118,7 +106,7 @@ def test_dashboard_lists_runs(client_with_db: tuple[TestClient, Path]) -> None:
             window_to=datetime(2024, 1, 15, 0, 0, 0),
             email_count=5,
         ))
-        session.add(db_module.BriefingRun(
+        session.add(db_module.Run(
             started_at=datetime(2024, 1, 16, 8, 0, 0),
             finished_at=datetime(2024, 1, 16, 8, 1, 0),
             status="failed",
@@ -129,38 +117,37 @@ def test_dashboard_lists_runs(client_with_db: tuple[TestClient, Path]) -> None:
 
     resp = tc.get("/")
     assert resp.status_code == 200
-    # Both rows should show status text.
     assert "success" in resp.text
     assert "failed" in resp.text
 
 
 # ---------------------------------------------------------------------------
-# Briefing detail tests
+# Run detail tests
 # ---------------------------------------------------------------------------
 
-def test_briefing_detail_renders_markdown(client_with_db: tuple[TestClient, Path]) -> None:
+def test_run_detail_renders_markdown(client_with_db: tuple[TestClient, Path]) -> None:
     tc, db_path = client_with_db
 
     with db_module.session_scope(db_path, write=True) as session:
-        run = db_module.BriefingRun(
+        run = db_module.Run(
             started_at=_utcnow(),
             status="success",
             window_from=_utcnow(),
             window_to=_utcnow(),
             email_count=0,
-            briefing_markdown="# hi",
+            markdown="# hi",
         )
         session.add(run)
         session.flush()
         run_id = run.id
 
-    resp = tc.get(f"/briefings/{run_id}")
+    resp = tc.get(f"/runs/{run_id}")
     assert resp.status_code == 200
     assert "<h1>hi</h1>" in resp.text
 
 
-def test_briefing_detail_404(client: TestClient) -> None:
-    resp = client.get("/briefings/99999")
+def test_run_detail_404(client: TestClient) -> None:
+    resp = client.get("/runs/99999")
     assert resp.status_code == 404
 
 
@@ -267,4 +254,4 @@ def test_actions_run_falls_back_when_systemctl_missing(
     assert len(popen_calls) == 1
     assert popen_calls[0][0].endswith("python") or "python" in popen_calls[0][0]
     assert "-m" in popen_calls[0]
-    assert "hyacine.pipeline.briefing" in popen_calls[0]
+    assert "hyacine.pipeline.run" in popen_calls[0]

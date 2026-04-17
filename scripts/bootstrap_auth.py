@@ -6,7 +6,7 @@ Run once:
 Prints a URL + 8-char device code. Open the URL in any browser, sign in with
 your Microsoft account, and complete any MFA required. After success this
 script persists ``auth_record.json`` (chmod 600) in the configured auth_dir
-(default ``~/.local/state/hyacine/auth/``) so future runs authenticate silently.
+(default ``./data/auth/``) so future runs authenticate silently.
 """
 from __future__ import annotations
 

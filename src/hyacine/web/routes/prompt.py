@@ -1,4 +1,4 @@
-"""GET/POST /prompt — edit the briefing system prompt.
+"""GET/POST /prompt — edit the hyacine system prompt.
 
 POST validates with jinja2.Environment().parse() before persisting + snapshot.
 Returns 422 with line-number hints on syntax failure.

@@ -15,7 +15,7 @@ def test_init_db_creates_tables(tmp_path: Path) -> None:
     db_mod.init_db(db_path)
     engine = db_mod.get_engine(db_path)
     names = set(inspect(engine).get_table_names())
-    assert {"briefing_runs", "watermarks", "config_snapshots"}.issubset(names)
+    assert {"runs", "watermarks", "config_snapshots"}.issubset(names)
 
 
 def test_init_db_is_idempotent(tmp_path: Path) -> None:

@@ -1,5 +1,5 @@
 # config/defaults.yaml
-# Generic defaults — copy to ~/.config/hyacine/config.yaml and tune.
+# Generic defaults — copy to config/config.yaml and tune.
 # Or run `python -m hyacine init` to generate automatically.
 
 # REQUIRED — your delivery address (the wizard will set this for you)
@@ -9,13 +9,13 @@ recipient_email: ""
 # Full list: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
 timezone: UTC
 
-# Output language for the briefing email: "en" (English) or "zh-CN" (Simplified Chinese)
+# Output language for the report email: "en" (English) or "zh-CN" (Simplified Chinese)
 language: en
 
 # LLM model passed to `claude -p --model`. "sonnet" = claude-sonnet-4-6.
 llm_model: sonnet
 
-# Time of day to send the briefing (HH:MM in the configured timezone).
+# Time of day to send the report (HH:MM in the configured timezone).
 # The systemd timer uses this value — re-run `python -m hyacine init` after changing.
 run_time: "07:30"
 

@@ -2,6 +2,7 @@
 # Install: ~/.config/systemd/user/hyacine-web.service
 # Enable:  systemctl --user daemon-reload && systemctl --user enable --now hyacine-web.service
 # Linger:  loginctl enable-linger <user>   (so it survives ssh logout)
+# Assumes the repo is cloned at ~/hyacine with `uv sync` run.
 
 [Unit]
 Description=Hyacine web UI (FastAPI)
@@ -11,12 +12,12 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=%h/hyacine
-EnvironmentFile=%h/.config/hyacine/hyacine.env
+EnvironmentFile=%h/hyacine/.env
 # Belt-and-suspenders: make sure API-key vars can NEVER leak into the Claude
 # Code subprocess from an inherited env.
 UnsetEnvironment=ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN
 # --workers 1 is required: multi-worker breaks SQLite single-writer invariant.
-ExecStart=%h/briefing/.venv/bin/uvicorn briefing.web.app:app --host 127.0.0.1 --port 8765 --workers 1
+ExecStart=%h/hyacine/.venv/bin/uvicorn hyacine.web.app:app --host 127.0.0.1 --port 8765 --workers 1
 Restart=on-failure
 RestartSec=5s
 
@@ -26,7 +27,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=%h/.config/hyacine %h/.local/state/hyacine
+ReadWritePaths=%h/hyacine/data %h/hyacine/prompts %h/hyacine/config
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true

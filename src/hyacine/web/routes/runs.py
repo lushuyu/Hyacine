@@ -1,4 +1,4 @@
-"""GET /briefings/{id} — single run detail view."""
+"""GET /runs/{id} — single run detail view."""
 from __future__ import annotations
 
 import bleach
@@ -7,12 +7,11 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from sqlalchemy import select
 
-from hyacine.db import BriefingRun, session_scope
+from hyacine.db import Run, session_scope
 from hyacine.web.utils import get_settings_from_request
 
-router = APIRouter(prefix="/briefings")
+router = APIRouter(prefix="/runs")
 
-# Tags/attrs that are safe for display in HTML.
 _ALLOWED_TAGS = [
     "p", "br", "strong", "em", "b", "i", "u", "s",
     "h1", "h2", "h3", "h4", "h5", "h6",
@@ -39,24 +38,24 @@ def _render_markdown(text: str) -> str:
 
 
 @router.get("/{run_id}", response_class=HTMLResponse)
-def briefing_detail(run_id: int, request: Request) -> HTMLResponse:
+def run_detail(run_id: int, request: Request) -> HTMLResponse:
     settings = get_settings_from_request(request)
 
     with session_scope(settings.db_path) as session:
         row = session.execute(
-            select(BriefingRun).where(BriefingRun.id == run_id)
+            select(Run).where(Run.id == run_id)
         ).scalar_one_or_none()
 
     if row is None:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
 
     rendered_html = ""
-    if row.briefing_markdown:
-        rendered_html = _render_markdown(row.briefing_markdown)
+    if row.markdown:
+        rendered_html = _render_markdown(row.markdown)
 
     templates = request.app.state.templates
     return templates.TemplateResponse(
         request,
-        "briefing_detail.html",
+        "run_detail.html",
         {"run": row, "rendered_html": rendered_html},
     )

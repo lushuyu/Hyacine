@@ -69,7 +69,7 @@ def summarize(
     max_turns: int = 3,
     permission_mode: str = "default",
     timeout_seconds: int = 300,
-    user_message: str = "Generate the daily briefing from the JSON on stdin.",
+    user_message: str = "Generate the daily report from the JSON on stdin.",
 ) -> str:
     """Run `claude -p` with json_input piped to stdin; return the `result` string.
 

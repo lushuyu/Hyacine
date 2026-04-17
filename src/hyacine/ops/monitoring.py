@@ -87,14 +87,14 @@ def send_error_email(
     subject_suffix: str,
     traceback_text: str,
 ) -> bool:
-    """Reuse graph.send with a [BRIEFING ERROR] prefix. Never raises."""
+    """Reuse graph.send with a [HYACINE ERROR] prefix. Never raises."""
     try:
-        from hyacine.graph.send import send_briefing_email  # lazy import
+        from hyacine.graph.send import send_email  # lazy import
 
         now_utc = datetime.now(UTC).isoformat(timespec="seconds")
-        subject = f"[BRIEFING ERROR] {subject_suffix}"
+        subject = f"[HYACINE ERROR] {subject_suffix}"
         markdown_body = f"**Error timestamp (UTC):** {now_utc}\n\n```\n{traceback_text}\n```\n"
-        send_briefing_email(cred, recipient, subject, markdown_body)
+        send_email(cred, recipient, subject, markdown_body)
         return True
     except Exception:
         return False

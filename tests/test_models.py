@@ -4,13 +4,13 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from hyacine.models import (
-    BriefingRunRecord,
     CalendarEvent,
     CategoryHint,
     EmailMessage,
     FetchResult,
     HcPingResult,
     Importance,
+    RunRecord,
     RunStatus,
 )
 
@@ -33,7 +33,7 @@ def test_fetch_result_round_trip() -> None:
 
 def test_run_record_defaults() -> None:
     now = datetime.now(tz=UTC)
-    rec = BriefingRunRecord(started_at=now, window_from=now, window_to=now)
+    rec = RunRecord(started_at=now, window_from=now, window_to=now)
     assert rec.status is RunStatus.PENDING
     assert rec.hc_ping_result is HcPingResult.SKIPPED
     assert rec.email_count == 0

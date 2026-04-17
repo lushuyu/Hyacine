@@ -1,8 +1,7 @@
-"""Pydantic data models — the frozen public contract for the briefing pipeline.
+"""Pydantic data models — the frozen public contract for the hyacine pipeline.
 
 These shapes are consumed by every module: graph fetch returns these, pipeline
-hands them to LLM wrappers, DB persists them, Web UI reads them back. Do NOT
-modify during Phase 1 sub-agent work without explicit human confirmation.
+hands them to LLM wrappers, DB persists them, Web UI reads them back.
 """
 from __future__ import annotations
 
@@ -99,7 +98,7 @@ class HcPingResult(StrEnum):
     SKIPPED = "skipped"
 
 
-class BriefingRunRecord(BaseModel):
+class RunRecord(BaseModel):
     """DB row for one end-to-end pipeline run."""
 
     model_config = ConfigDict(extra="ignore")
@@ -111,7 +110,7 @@ class BriefingRunRecord(BaseModel):
     window_from: datetime
     window_to: datetime
     email_count: int = 0
-    briefing_markdown: str | None = None
+    markdown: str | None = None
     error_traceback: str | None = None
     hc_ping_result: HcPingResult = HcPingResult.SKIPPED
     sent_message_id: str | None = None

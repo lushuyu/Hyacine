@@ -49,8 +49,8 @@ uv pip uninstall pygobject
 
 ### `401 Unauthorized`
 
-Token expired or revoked. Delete `~/.local/state/hyacine/auth/` and re-run
-`bootstrap_auth.py`.
+Token expired or revoked. Delete `./data/auth/` and
+`~/.IdentityService/hyacine_cache*`, then re-run `bootstrap_auth.py`.
 
 ### `403 Forbidden`
 
@@ -72,14 +72,14 @@ Environment file not loaded. Check:
 systemctl --user show-environment | grep -i hyacine
 ```
 
-Verify the `EnvironmentFile=` path in the unit matches where your
-`hyacine.env` lives. Default: `~/.config/hyacine/hyacine.env`.
+Verify the `EnvironmentFile=` path in the unit matches where your `.env`
+lives. Default: `~/hyacine/.env`.
 
 ### `claude subprocess timed out`
 
-Bump `llm_timeout_seconds` in `~/.config/hyacine/config.yaml`. Default 300 is
-usually enough — if you hit this frequently, your fetch window is probably
-too large (reduce `fetch_max_emails`).
+Bump `llm_timeout_seconds` in `./config/config.yaml`. Default 300 is usually
+enough — if you hit this frequently, your fetch window is probably too large
+(reduce `fetch_max_emails`).
 
 ### `claude returned an error`
 
@@ -105,8 +105,8 @@ step, all four scopes must be listed.
 
 ### `413 Payload Too Large` / `422`
 
-HTML body too large. Usually indicates a runaway LLM response. Check
-`briefing_markdown` in the database row and the corresponding prompt; consider
+HTML body too large. Usually indicates a runaway LLM response. Check the
+`markdown` column in the database row and the corresponding prompt; consider
 tightening the prompt's output format section.
 
 ## Host rebooted, daemon did not start
@@ -140,33 +140,32 @@ journalctl --user -u hyacine-run.service --since "7 days ago" \
     | grep -iE "(httpx|connect|timeout|monitoring)"
 ```
 
-## XDG-specific issues
+## Path override issues
 
 ### Wizard cannot find existing config
 
-Respect the resolution order: env vars override everything. Check:
+Env vars override everything. Check:
 
 ```bash
 env | grep -i hyacine_
 ```
 
-Either unset the variables or re-run the wizard with `--config-dir` pointing
-at your intended location.
+Either unset the variables or re-run the wizard with `--overwrite`.
 
-### `doctor.py` reports wrong mode on `hyacine.env`
+### `doctor.py` reports wrong mode on `.env`
 
 ```bash
-chmod 600 ~/.config/hyacine/hyacine.env
+chmod 600 ~/hyacine/.env
 ```
 
-### `git pull` conflicts on `prompts/briefing.md` or `config/config.yaml`
+### `git pull` conflicts on `prompts/hyacine.md` or `config/config.yaml`
 
-These paths are gitignored. If you have local copies in the repo tree from a
-previous install, delete them — the canonical copies live in
-`~/.config/hyacine/`.
+These paths are gitignored. If you have uncommitted local copies that
+conflict, they were either committed by mistake in an earlier release or
+your working tree has the old layout. Remove them and re-run the wizard:
 
 ```bash
 cd ~/hyacine
-rm -f prompts/briefing.md config/config.yaml config/rules.yaml
-git pull
+rm -f prompts/hyacine.md config/config.yaml config/rules.yaml
+python -m hyacine init
 ```
