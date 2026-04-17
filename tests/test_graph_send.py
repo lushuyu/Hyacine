@@ -26,12 +26,13 @@ def test_render_html_body_escapes_script_tag() -> None:
 
 
 # ---------------------------------------------------------------------------
-# test_send_briefing_email_posts_expected_body
+# test_send_email_posts_expected_body
 # ---------------------------------------------------------------------------
 
-def test_send_briefing_email_posts_expected_body() -> None:
-    """send_briefing_email should POST correctly shaped JSON to /me/sendMail."""
-    from hyacine.graph.send import send_briefing_email
+def test_send_email_posts_expected_body() -> None:
+    """send_email should POST correctly shaped JSON to /me/sendMail."""
+    # (renamed test: was test_send_briefing_email_posts_expected_body)
+    from hyacine.graph.send import send_email
 
     captured_payload: dict = {}
     captured_url: str = ""
@@ -54,7 +55,7 @@ def test_send_briefing_email_posts_expected_body() -> None:
         mock_client.post.side_effect = fake_post
         mock_client_cls.return_value = mock_client
 
-        result = send_briefing_email(
+        result = send_email(
             cred,
             recipient="test@example.com",
             subject="Test Subject",
@@ -83,9 +84,9 @@ def test_send_briefing_email_posts_expected_body() -> None:
     assert result == "test-request-id-123"
 
 
-def test_send_briefing_email_synthetic_id_when_no_header() -> None:
+def test_send_email_synthetic_id_when_no_header() -> None:
     """When request-id header is absent, a synthetic uuid is returned."""
-    from hyacine.graph.send import send_briefing_email
+    from hyacine.graph.send import send_email
 
     def fake_post(url: str, **kwargs: object) -> MagicMock:
         resp = MagicMock()
@@ -102,14 +103,14 @@ def test_send_briefing_email_synthetic_id_when_no_header() -> None:
         mock_client.post.side_effect = fake_post
         mock_client_cls.return_value = mock_client
 
-        result = send_briefing_email(cred, "r@x.com", "s", "body")
+        result = send_email(cred, "r@x.com", "s", "body")
 
     assert result.startswith("sendmail-")
 
 
-def test_send_briefing_email_raises_on_non_2xx() -> None:
+def test_send_email_raises_on_non_2xx() -> None:
     """RuntimeError should be raised when Graph returns a non-2xx status."""
-    from hyacine.graph.send import send_briefing_email
+    from hyacine.graph.send import send_email
 
     def fake_post(url: str, **kwargs: object) -> MagicMock:
         resp = MagicMock()
@@ -129,4 +130,4 @@ def test_send_briefing_email_raises_on_non_2xx() -> None:
 
         import pytest
         with pytest.raises(RuntimeError, match="403"):
-            send_briefing_email(cred, "r@x.com", "s", "body")
+            send_email(cred, "r@x.com", "s", "body")

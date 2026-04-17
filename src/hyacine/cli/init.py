@@ -1,14 +1,15 @@
 """Interactive setup wizard for hyacine.
 
-Entry point: ``python -m hyacine init [--config-dir PATH] [--overwrite] [--no-prompt-token]``
+Entry point: ``python -m hyacine init [--overwrite] [--no-prompt-token]``
 
 Flow:
-  1. Resolve XDG config/state dirs.
+  1. Resolve in-repo config / prompt / data dirs.
   2. Ensure directories exist.
-  3. Idempotency check on each target file.
+  3. Idempotency check on each target file (update / backup+overwrite / skip).
   4. Collect answers from the user.
-  5. Render prompts/briefing.md from Jinja2 template.
-  6. Write config.yaml, rules.yaml, hyacine.env.
+  5. Render prompts/hyacine.md from Jinja2 template.
+  6. Write config.yaml, rules.yaml, and .env (update mode merges .env:
+     blank answers keep existing values, unknown keys are preserved).
   7. Print summary + next steps.
 """
 from __future__ import annotations
@@ -32,16 +33,6 @@ from jinja2 import Environment, FileSystemLoader
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _xdg_config_home() -> Path:
-    raw = os.environ.get("XDG_CONFIG_HOME", "")
-    return Path(raw) if raw else Path.home() / ".config"
-
-
-def _xdg_state_home() -> Path:
-    raw = os.environ.get("XDG_STATE_HOME", "")
-    return Path(raw) if raw else Path.home() / ".local" / "state"
-
-
 def _green(text: str) -> str:
     return f"\033[32m{text}\033[0m"
 
@@ -59,12 +50,6 @@ def _ask(
     default: str | None = None,
     validate: Callable[[str], None] | None = None,
 ) -> str:
-    """Print a prompt and read one line from stdin.
-
-    If *default* is provided it is shown in brackets and returned when the
-    user submits an empty line.  *validate* may be a callable that raises
-    ``ValueError`` with a human-readable message on bad input.
-    """
     display = f"{prompt}"
     if default is not None:
         display += f" [{default}]"
@@ -86,7 +71,6 @@ def _ask(
 
 
 def _ask_multiline(prompt: str) -> str:
-    """Read lines until a blank line or EOF."""
     print(f"{prompt} (blank line to finish):")
     lines: list[str] = []
     while True:
@@ -137,7 +121,6 @@ def _backup_path(p: Path) -> Path:
 
 def _repo_root() -> Path:
     """Return the directory containing this file's package root (repo root)."""
-    # src/hyacine/cli/init.py → src/hyacine/cli → src/hyacine → src → repo_root
     return Path(__file__).parent.parent.parent.parent
 
 
@@ -152,7 +135,6 @@ RESOLUTION_QUIT = "quit"
 
 
 def _resolve_existing(path: Path, overwrite: bool) -> str:
-    """Return a resolution string for a file that already exists."""
     if overwrite:
         bak = _backup_path(path)
         shutil.copy2(path, bak)
@@ -202,7 +184,6 @@ _DEFAULT_CATEGORIES_MD = textwrap.dedent("""\
 # ---------------------------------------------------------------------------
 
 def _collect_answers(args: argparse.Namespace) -> dict[str, object]:  # noqa: C901
-    """Interactively collect all wizard fields; return a dict."""
     print("\n" + "=" * 60)
     print("  hyacine setup wizard")
     print("  Press Ctrl-C to abort at any time.")
@@ -210,19 +191,14 @@ def _collect_answers(args: argparse.Namespace) -> dict[str, object]:  # noqa: C9
 
     answers: dict[str, object] = {}
 
-    # 1. Operator name
     answers["name"] = _ask("Your display name (e.g. Alice)")
-
-    # 2. Operator role
     answers["role"] = _ask("Your role (e.g. PM at Acme Robotics)")
 
-    # 3. Identity blurb
     print()
     answers["identity_blurb"] = _ask_multiline(
         "Identity blurb — 1-3 sentences about yourself, focus areas, research interests"
     )
 
-    # 4. Priorities (at least 1, at most 10)
     print("\nPriority signals — what should trigger the 'must-do today' category?")
     priorities: list[str] = []
     while len(priorities) < 10:
@@ -235,7 +211,6 @@ def _collect_answers(args: argparse.Namespace) -> dict[str, object]:  # noqa: C9
         priorities.append(p)
     answers["priorities"] = priorities
 
-    # 5. Category hints
     print("\nCategory hints — a default set is provided. Accept or edit?")
     print(_DEFAULT_CATEGORIES_MD)
     while True:
@@ -262,25 +237,16 @@ def _collect_answers(args: argparse.Namespace) -> dict[str, object]:  # noqa: C9
             break
         print("  Please enter A or E.")
 
-    # 6. Email recipient
-    answers["email_recipient"] = _ask("Email recipient (where the daily briefing is sent)")
-
-    # 7. Timezone
+    answers["email_recipient"] = _ask("Email recipient (where the daily report is sent)")
     answers["timezone"] = _ask("Timezone (IANA, e.g. America/New_York)", default="UTC", validate=_validate_tz)
-
-    # 8. Language
     answers["language"] = _ask("Language (en / zh-CN)", default="en", validate=_validate_language)
-
-    # 9. Run time
     answers["run_time"] = _ask("Daily run time (HH:MM in your timezone)", default="07:30", validate=_validate_time)
 
-    # 10. Microsoft tenant id
     tenant = _ask("Microsoft tenant ID (UUID or 'common')", default="common")
     if tenant != "common" and not _looks_like_uuid(tenant):
         print(_yellow("  Warning: that doesn't look like a valid UUID. Proceeding anyway."))
     answers["graph_tenant_id"] = tenant
 
-    # 11. OAuth token (optional)
     if not args.no_prompt_token:
         existing_token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "")
         if existing_token:
@@ -296,11 +262,9 @@ def _collect_answers(args: argparse.Namespace) -> dict[str, object]:  # noqa: C9
     else:
         answers["oauth_token"] = ""
 
-    # 12. ntfy topic
     print("\n  ntfy.sh push notifications (optional). See https://ntfy.sh/ for setup.")
     answers["ntfy_topic"] = _ask("ntfy topic (blank to skip)", default="")
 
-    # 13. healthchecks UUID
     print("  healthchecks.io monitoring (optional). See https://healthchecks.io/ for setup.")
     answers["healthchecks_uuid"] = _ask("healthchecks.io UUID (blank to skip)", default="")
 
@@ -308,10 +272,8 @@ def _collect_answers(args: argparse.Namespace) -> dict[str, object]:  # noqa: C9
 
 
 def _render_prompt(answers: dict[str, object], repo_root: Path) -> str:
-    """Render briefing.md.template with the collected answers."""
     template_path = repo_root / "prompts" / "hyacine.md.template"
     if not template_path.exists():
-        # Fallback: look relative to package
         template_path = repo_root / "hyacine.md.template"
 
     env = Environment(
@@ -341,7 +303,6 @@ def _render_prompt(answers: dict[str, object], repo_root: Path) -> str:
 
 
 def _build_config_yaml(answers: dict[str, object]) -> str:
-    """Build config.yaml content from answers."""
     data = {
         "recipient_email": answers["email_recipient"],
         "timezone": answers["timezone"],
@@ -355,14 +316,51 @@ def _build_config_yaml(answers: dict[str, object]) -> str:
     return yaml.dump(data, default_flow_style=False, allow_unicode=True)
 
 
-def _build_env_file(answers: dict[str, object]) -> str:
-    """Build hyacine.env content."""
-    lines = [
-        f"CLAUDE_CODE_OAUTH_TOKEN={answers.get('oauth_token', '')}",
-        f"HYACINE_GRAPH_TENANT_ID={answers.get('graph_tenant_id', 'common')}",
-        f"HYACINE_NTFY_TOPIC={answers.get('ntfy_topic', '')}",
-        f"HYACINE_HEALTHCHECKS_UUID={answers.get('healthchecks_uuid', '')}",
-    ]
+_MANAGED_ENV_KEYS = (
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "HYACINE_GRAPH_TENANT_ID",
+    "HYACINE_NTFY_TOPIC",
+    "HYACINE_HEALTHCHECKS_UUID",
+)
+
+
+def _parse_env_file(path: Path) -> dict[str, str]:
+    """Parse a dotenv file with the same grammar pydantic-settings uses.
+
+    Delegates to python-dotenv (a transitive dep via pydantic-settings), so
+    `export KEY=val`, quoted values, inline `# comment` tails, and escape
+    sequences are handled identically to how the runtime loader reads the
+    file — guaranteeing merge mode doesn't misparse existing entries.
+    """
+    if not path.exists():
+        return {}
+    from dotenv import dotenv_values  # noqa: PLC0415
+
+    return {k: v for k, v in dotenv_values(path).items() if v is not None}
+
+
+def _build_env_file(
+    answers: dict[str, object],
+    existing: dict[str, str] | None = None,
+) -> str:
+    # In update mode, blank wizard answers keep whatever was already in .env,
+    # and any keys the wizard doesn't manage are preserved at the end.
+    values: dict[str, str] = {
+        "CLAUDE_CODE_OAUTH_TOKEN": str(answers.get("oauth_token", "")),
+        "HYACINE_GRAPH_TENANT_ID": str(answers.get("graph_tenant_id", "common")),
+        "HYACINE_NTFY_TOPIC": str(answers.get("ntfy_topic", "")),
+        "HYACINE_HEALTHCHECKS_UUID": str(answers.get("healthchecks_uuid", "")),
+    }
+    if existing:
+        for key in _MANAGED_ENV_KEYS:
+            if not values[key] and existing.get(key):
+                values[key] = existing[key]
+
+    lines = [f"{k}={values[k]}" for k in _MANAGED_ENV_KEYS]
+    if existing:
+        for key, val in existing.items():
+            if key not in _MANAGED_ENV_KEYS:
+                lines.append(f"{key}={val}")
     return "\n".join(lines) + "\n"
 
 
@@ -371,15 +369,14 @@ def _build_env_file(answers: dict[str, object]) -> str:
 # ---------------------------------------------------------------------------
 
 def run_init(argv: list[str] | None = None) -> int:  # noqa: C901
-    """Interactive wizard. Returns 0 on success, non-zero on abort/error."""
     parser = argparse.ArgumentParser(
         prog="hyacine init",
         description="Interactive setup wizard for hyacine.",
     )
     parser.add_argument(
-        "--config-dir",
+        "--repo-root",
         metavar="PATH",
-        help="Override XDG config directory (default: ~/.config/hyacine/)",
+        help="Override the repo root (default: auto-detected).",
     )
     parser.add_argument(
         "--overwrite",
@@ -393,41 +390,41 @@ def run_init(argv: list[str] | None = None) -> int:  # noqa: C901
     )
     args = parser.parse_args(argv)
 
-    # Resolve directories
-    if args.config_dir:
-        config_dir = Path(args.config_dir).expanduser().resolve()
-    else:
-        config_dir = _xdg_config_home() / "hyacine"
+    repo_root = Path(args.repo_root).expanduser().resolve() if args.repo_root else _repo_root()
 
-    state_dir = _xdg_state_home() / "hyacine"
+    config_dir = repo_root / "config"
+    prompts_dir = repo_root / "prompts"
+    data_dir = repo_root / "data"
 
-    # Target files
-    env_file = config_dir / "hyacine.env"
+    env_file = repo_root / ".env"
     config_yaml = config_dir / "config.yaml"
     rules_yaml = config_dir / "rules.yaml"
-    prompts_dir = config_dir / "prompts"
     prompt_md = prompts_dir / "hyacine.md"
 
-    print(f"\nTarget config dir : {config_dir}")
-    print(f"Target state dir  : {state_dir}")
-    print("\nFiles that will be written:")
+    print(f"\nRepo root  : {repo_root}")
+    print("Files that will be written:")
     for f in [env_file, config_yaml, rules_yaml, prompt_md]:
         print(f"  {f}")
 
-    # Create directories
     config_dir.mkdir(parents=True, exist_ok=True)
-    config_dir.chmod(0o700)
-    state_dir.mkdir(parents=True, exist_ok=True)
-    state_dir.chmod(0o700)
     prompts_dir.mkdir(parents=True, exist_ok=True)
+    data_dir.mkdir(parents=True, exist_ok=True)
 
-    # Idempotency — check existing files
+    # Tighten directory perms: data/ holds the DB with run history and
+    # generated markdown; prompts/ and config/ hold personal identity +
+    # operational settings. 0700 means only the owner can traverse.
+    for directory in (config_dir, prompts_dir, data_dir):
+        try:
+            directory.chmod(0o700)
+        except OSError:
+            pass
+
     skip_all = False
     resolutions: dict[str, str] = {}
 
     for target in [env_file, config_yaml, rules_yaml, prompt_md]:
         if not target.exists():
-            resolutions[str(target)] = RESOLUTION_OVERWRITE  # new file, just write
+            resolutions[str(target)] = RESOLUTION_OVERWRITE
             continue
         if skip_all:
             resolutions[str(target)] = RESOLUTION_SKIP
@@ -440,26 +437,27 @@ def run_init(argv: list[str] | None = None) -> int:  # noqa: C901
             skip_all = True
         resolutions[str(target)] = res
 
-    # If everything is skipped, nothing to do
     all_skipped = all(v == RESOLUTION_SKIP for v in resolutions.values())
     if all_skipped:
         print(_yellow("\nAll files skipped. Nothing written."))
         return 0
 
-    # Collect answers
     try:
         answers = _collect_answers(args)
     except KeyboardInterrupt:
         print("\n\nAborted.")
         return 1
 
-    # Render content
-    repo_root = _repo_root()
     prompt_content = _render_prompt(answers, repo_root)
     config_content = _build_config_yaml(answers)
-    env_content = _build_env_file(answers)
 
-    # Write files
+    existing_env = (
+        _parse_env_file(env_file)
+        if resolutions.get(str(env_file)) == RESOLUTION_UPDATE
+        else None
+    )
+    env_content = _build_env_file(answers, existing=existing_env)
+
     written: list[Path] = []
 
     def _should_write(path: Path) -> bool:
@@ -474,7 +472,6 @@ def run_init(argv: list[str] | None = None) -> int:  # noqa: C901
         written.append(config_yaml)
 
     if _should_write(rules_yaml):
-        # Copy generic starter rules (only if not skipping)
         starter = repo_root / "config" / "rules.starter.yaml"
         if starter.exists():
             shutil.copy2(starter, rules_yaml)
@@ -487,7 +484,6 @@ def run_init(argv: list[str] | None = None) -> int:  # noqa: C901
         env_file.chmod(0o600)
         written.append(env_file)
 
-    # Summary
     print("\n" + _green("Setup complete!") + "\n")
     print("Files written:")
     for path in written:
@@ -499,8 +495,8 @@ def run_init(argv: list[str] | None = None) -> int:  # noqa: C901
     print("       python scripts/bootstrap_auth.py")
     print("  2. Verify the send path:")
     print("       python scripts/test_sendmail.py --yes")
-    print("  3. Run your first briefing:")
-    print("       python -m hyacine.pipeline.briefing")
+    print("  3. Run your first hyacine report:")
+    print("       python -m hyacine run")
     print("  4. Start the web UI:")
     print("       uv run uvicorn hyacine.web.app:app --host 127.0.0.1 --port 8765 --workers 1")
 

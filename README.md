@@ -17,9 +17,10 @@ summary email that is sent back to your own inbox via `/me/sendMail`. A small
 FastAPI web UI lets you inspect past runs and tweak the prompt or classification
 rules without restarting anything.
 
-All per-user content — secrets, config, the identity prompt, the database, and
-auth tokens — lives in XDG directories outside the repo, so `git pull` never
-conflicts with your customisations and the same clone can serve multiple accounts.
+All per-user state — secrets, config, identity prompt, database, auth tokens —
+lives inside the repo checkout under `.env`, `config/`, `prompts/`, and
+`data/`. The user-specific files are gitignored, so `git pull` never conflicts
+with your customisations.
 
 ## Quickstart
 
@@ -27,15 +28,14 @@ conflicts with your customisations and the same clone can serve multiple account
 git clone https://github.com/lushuyu/Hyacine ~/hyacine
 cd ~/hyacine
 uv sync
-python -m hyacine init          # interactive wizard — writes config + prompt
+python -m hyacine init           # interactive wizard — writes .env, config/, prompts/hyacine.md
 python scripts/bootstrap_auth.py # one-time Microsoft Graph OAuth (device-code flow)
-python scripts/doctor.py         # sanity check — verifies paths, perms, credentials
-python -m hyacine.pipeline.briefing   # first manual run
+python scripts/doctor.py         # sanity check — paths, perms, credentials
+python -m hyacine run            # first manual run
 ```
 
 The wizard prompts for your name, role, priorities, delivery address, timezone,
-language, and credentials. It writes everything to the appropriate XDG paths and
-never touches the repo tree.
+language, and credentials. Everything it writes lives inside the repo tree.
 
 ## What you configure via the wizard
 
@@ -45,19 +45,19 @@ never touches the repo tree.
 - **Credentials** — Claude Code OAuth token, Microsoft tenant id (defaults to `common`)
 - **Monitoring** — optional ntfy topic and healthchecks.io UUID
 
-After first run you can edit config at any time via the Web UI or by hand in
-`~/.config/hyacine/`.
+After first run you can edit the config at any time via the Web UI or by hand
+in `./config/` and `./prompts/hyacine.md`.
 
 ## Architecture
 
-The pipeline runs as `briefing.pipeline.briefing`. It reads a watermark from
-`~/.local/state/hyacine/hyacine.db` to bound the fetch window, pulls mail and
-calendar events from `graph.microsoft.com`, classifies each message with the
-rules in `~/.config/hyacine/rules.yaml`, then invokes:
+The pipeline runs as `hyacine.pipeline.run`. It reads a watermark from
+`./data/hyacine.db` to bound the fetch window, pulls mail and calendar events
+from `graph.microsoft.com`, classifies each message with the rules in
+`./config/rules.yaml`, then invokes:
 
 ```
 claude -p --model sonnet --output-format json --tools "" --permission-mode default \
-       --append-system-prompt-file ~/.config/hyacine/prompts/briefing.md
+       --append-system-prompt-file ./prompts/hyacine.md
 ```
 
 The response is converted to HTML and sent via Graph `/me/sendMail`. On success
@@ -72,7 +72,7 @@ Outlook inbox + calendar
         │
         ▼
   Claude Code (claude -p)
-        │ briefing.md system prompt
+        │ hyacine.md system prompt
         ▼
   /me/sendMail → your inbox
 ```

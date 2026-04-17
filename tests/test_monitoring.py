@@ -155,10 +155,11 @@ def test_send_ntfy_non2xx_returns_false() -> None:
 
 
 def test_send_error_email_swallows_graph_failure() -> None:
-    """If send_briefing_email raises, send_error_email returns False — no propagation."""
+    """If send_email raises, send_error_email returns False — no propagation."""
+
     fake_cred = MagicMock()
     with patch(
-        "hyacine.graph.send.send_briefing_email",
+        "hyacine.graph.send.send_email",
         side_effect=RuntimeError("graph down"),
     ):
         result = send_error_email(fake_cred, "lu@example.com", "pipeline crashed", "Traceback...")
@@ -166,7 +167,7 @@ def test_send_error_email_swallows_graph_failure() -> None:
 
 
 def test_send_error_email_calls_with_expected_subject() -> None:
-    """Subject must start with [BRIEFING ERROR]."""
+    """Subject must start with [HYACINE ERROR]."""
     fake_cred = MagicMock()
     recorded: dict[str, object] = {}
 
@@ -175,13 +176,13 @@ def test_send_error_email_calls_with_expected_subject() -> None:
         recorded["body"] = markdown_body
         return "msg-id-001"
 
-    with patch("hyacine.graph.send.send_briefing_email", side_effect=capture):
+    with patch("hyacine.graph.send.send_email", side_effect=capture):
         result = send_error_email(
             fake_cred, "lu@example.com", "daily run failed", "Traceback (most recent call last)..."
         )
 
     assert result is True
-    assert str(recorded["subject"]).startswith("[BRIEFING ERROR]")
+    assert str(recorded["subject"]).startswith("[HYACINE ERROR]")
 
 
 def test_send_error_email_body_contains_pre_block() -> None:
@@ -193,7 +194,7 @@ def test_send_error_email_body_contains_pre_block() -> None:
         recorded["body"] = markdown_body
         return "id"
 
-    with patch("hyacine.graph.send.send_briefing_email", side_effect=capture):
+    with patch("hyacine.graph.send.send_email", side_effect=capture):
         send_error_email(fake_cred, "alice@example.com", "boom", "some traceback text")
 
     body = str(recorded["body"])
@@ -211,7 +212,7 @@ def test_send_error_email_body_contains_utc_timestamp() -> None:
         recorded["body"] = markdown_body
         return "id"
 
-    with patch("hyacine.graph.send.send_briefing_email", side_effect=capture):
+    with patch("hyacine.graph.send.send_email", side_effect=capture):
         send_error_email(fake_cred, "alice@example.com", "oops", "tb")
 
     body = str(recorded["body"])
@@ -225,9 +226,16 @@ def test_send_error_email_body_contains_utc_timestamp() -> None:
 
 _REQUIRED_SERVICE_DIRECTIVES = [
     "UnsetEnvironment=ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN",
-    "EnvironmentFile=%h/.config/hyacine/hyacine.env",
+    "EnvironmentFile=%h/hyacine/.env",
     "WorkingDirectory=%h/hyacine",
-    "ReadWritePaths=%h/.config/hyacine %h/.local/state/hyacine",
+    # ReadWritePaths must cover our repo state AND MSAL's non-relocatable
+    # token cache at ~/.IdentityService/. Split assertions keep the test
+    # robust if the ordering or spacing of the directive changes.
+    "ReadWritePaths=",
+    "%h/hyacine/data",
+    "%h/hyacine/prompts",
+    "%h/hyacine/config",
+    "%h/.IdentityService",
     "NoNewPrivileges=true",
     "PrivateTmp=true",
     "ProtectSystem=strict",

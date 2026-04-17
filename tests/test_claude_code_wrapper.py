@@ -81,7 +81,7 @@ class TestBuildArgv:
 
         argv = build_argv(
             prompt_file,
-            "Generate the daily briefing.",
+            "Generate the daily report.",
             model="sonnet",
             max_turns=3,
             permission_mode="plan",
@@ -104,7 +104,7 @@ class TestBuildArgv:
         idx_prompt = argv.index("--append-system-prompt-file")
         assert argv[idx_prompt + 1] == str(prompt_file)
         assert "--no-session-persistence" in argv
-        assert "Generate the daily briefing." in argv
+        assert "Generate the daily report." in argv
 
     def test_raises_if_prompt_file_missing(self, tmp_path: Path) -> None:
         missing = tmp_path / "nonexistent.md"

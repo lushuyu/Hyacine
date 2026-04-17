@@ -1,4 +1,4 @@
-"""Tests for the briefing init wizard (src/hyacine/cli/init.py)."""
+"""Tests for the hyacine init wizard (src/hyacine/cli/init.py)."""
 from __future__ import annotations
 
 import builtins
@@ -12,17 +12,14 @@ from hyacine.cli.init import (
     _ask,
     _build_config_yaml,
     _build_env_file,
+    _parse_env_file,
     _render_prompt,
     _validate_tz,
     run_init,
 )
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 def _answer_sequence(answers: list[str]):
-    """Return a mock for builtins.input that replays *answers* in order."""
     it = iter(answers)
 
     def _input(_prompt: str = "") -> str:
@@ -35,7 +32,6 @@ def _answer_sequence(answers: list[str]):
 
 
 def _minimal_answers() -> list[str]:
-    """Minimal valid stdin sequence for run_init wizard."""
     return [
         "Alice",                    # name
         "PM at Acme Robotics",      # role
@@ -52,6 +48,19 @@ def _minimal_answers() -> list[str]:
         "",                         # ntfy topic
         "",                         # healthchecks uuid
     ]
+
+
+def _setup_repo(repo_root: Path) -> None:
+    """Create the minimum repo skeleton the wizard expects."""
+    (repo_root / "prompts").mkdir(parents=True, exist_ok=True)
+    (repo_root / "prompts" / "hyacine.md.template").write_text(
+        "{{ name }} ({{ role }}) — {{ email_recipient }}",
+        encoding="utf-8",
+    )
+    (repo_root / "config").mkdir(exist_ok=True)
+    (repo_root / "config" / "rules.starter.yaml").write_text(
+        "rules: []\n", encoding="utf-8"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -124,13 +133,112 @@ def test_build_env_file_no_token() -> None:
     assert "CLAUDE_CODE_OAUTH_TOKEN=" in content
 
 
+def test_build_env_file_merge_preserves_existing_and_unknown_keys() -> None:
+    existing = {
+        "CLAUDE_CODE_OAUTH_TOKEN": "old-secret-token",
+        "HYACINE_GRAPH_TENANT_ID": "old-tenant",
+        "HYACINE_NTFY_TOPIC": "old-topic",
+        "HYACINE_HEALTHCHECKS_UUID": "old-uuid",
+        "USER_CUSTOM_KEY": "user-value",
+        "ANOTHER_UNRELATED": "please-keep-me",
+    }
+    answers: dict[str, object] = {
+        "oauth_token": "",                   # blank → keep old token
+        "graph_tenant_id": "new-tenant",     # provided → override
+        "ntfy_topic": "",                    # blank → keep old topic
+        "healthchecks_uuid": "new-uuid",     # provided → override
+    }
+    content = _build_env_file(answers, existing=existing)
+    assert "CLAUDE_CODE_OAUTH_TOKEN=old-secret-token" in content
+    assert "HYACINE_GRAPH_TENANT_ID=new-tenant" in content
+    assert "HYACINE_NTFY_TOPIC=old-topic" in content
+    assert "HYACINE_HEALTHCHECKS_UUID=new-uuid" in content
+    assert "USER_CUSTOM_KEY=user-value" in content
+    assert "ANOTHER_UNRELATED=please-keep-me" in content
+
+
+def test_parse_env_file_round_trip(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "# comment line\n\nFOO=bar\nBAZ=qux=with=equals\n# trailing comment\n",
+        encoding="utf-8",
+    )
+    parsed = _parse_env_file(env_file)
+    assert parsed == {"FOO": "bar", "BAZ": "qux=with=equals"}
+
+
+def test_parse_env_file_handles_dotenv_grammar(tmp_path: Path) -> None:
+    """Covers export prefix, quoting, and inline-comment edge cases."""
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join([
+            "export EXPORTED=yes",
+            'QUOTED_DOUBLE="value with spaces"',
+            "QUOTED_SINGLE='raw $value'",
+            "WITH_INLINE=clean # trailing comment",
+            "HASH_IN_QUOTES=\"foo#bar\"",
+            "",
+        ]),
+        encoding="utf-8",
+    )
+    parsed = _parse_env_file(env_file)
+    assert parsed["EXPORTED"] == "yes"
+    assert parsed["QUOTED_DOUBLE"] == "value with spaces"
+    assert parsed["QUOTED_SINGLE"] == "raw $value"
+    assert parsed["WITH_INLINE"] == "clean"
+    assert parsed["HASH_IN_QUOTES"] == "foo#bar"
+
+
+def test_parse_env_file_missing_returns_empty(tmp_path: Path) -> None:
+    assert _parse_env_file(tmp_path / "does-not-exist.env") == {}
+
+
+def test_update_resolution_preserves_existing_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_root = tmp_path / "repo"
+    _setup_repo(repo_root)
+
+    env_file = repo_root / ".env"
+    env_file.write_text(
+        "CLAUDE_CODE_OAUTH_TOKEN=preserved-token\n"
+        "HYACINE_GRAPH_TENANT_ID=preserved-tenant\n"
+        "USER_CUSTOM_KEY=keep-this-too\n",
+        encoding="utf-8",
+    )
+
+    answers_blank_secrets = [
+        "Alice", "PM at Acme", "Focus.", "",
+        "Direct reports", "",
+        "a",
+        "alice@example.com", "UTC", "en", "07:30",
+        "common",
+        "", "",
+    ]
+
+    monkeypatch.setattr("getpass.getpass", lambda _prompt="": "")
+    # Accept 'update' for .env, overwrite-without-backup semantics via 'b' for others
+    # would require a backup; simplest: skip-all for non-.env by answering 'u' then 's'
+    # Actually only .env exists, so only one prompt.
+    monkeypatch.setattr(
+        builtins, "input",
+        _answer_sequence(["u"] + answers_blank_secrets),
+    )
+
+    rc = run_init(["--repo-root", str(repo_root)])
+    assert rc == 0
+
+    content = env_file.read_text(encoding="utf-8")
+    assert "CLAUDE_CODE_OAUTH_TOKEN=preserved-token" in content
+    assert "HYACINE_GRAPH_TENANT_ID=common" in content
+    assert "USER_CUSTOM_KEY=keep-this-too" in content
+
+
 # ---------------------------------------------------------------------------
 # Unit: _render_prompt
 # ---------------------------------------------------------------------------
 
 def test_render_prompt_substitution(tmp_path: Path) -> None:
-    """Template placeholders are replaced with wizard answers."""
-    # Write a minimal template
     prompts_dir = tmp_path / "prompts"
     prompts_dir.mkdir()
     template = prompts_dir / "hyacine.md.template"
@@ -149,7 +257,6 @@ def test_render_prompt_substitution(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    # Patch _repo_root so it points at our tmp_path
     answers: dict[str, object] = {
         "name": "Alice",
         "role": "PM at Acme",
@@ -192,191 +299,106 @@ def test_render_prompt_zh(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Integration: fresh run writes all expected files with correct chmod
+# Integration: fresh run writes the four expected files
 # ---------------------------------------------------------------------------
 
 def test_fresh_run_writes_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    config_dir = tmp_path / "config"
-
-    # Set up environment so XDG dirs are in tmp_path
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg_config"))
-    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "xdg_state"))
-
-    # Create a minimal template
     repo_root = tmp_path / "repo"
-    prompts_dir = repo_root / "prompts"
-    prompts_dir.mkdir(parents=True)
-    (prompts_dir / "hyacine.md.template").write_text(
-        "{{ name }} ({{ role }}) — {{ email_recipient }}",
-        encoding="utf-8",
-    )
-    (repo_root / "config").mkdir()
-    (repo_root / "config" / "rules.starter.yaml").write_text("rules: []\n", encoding="utf-8")
+    _setup_repo(repo_root)
 
-    # Patch _repo_root and getpass
-    import hyacine.cli.init as init_mod  # noqa: PLC0415
-
-    monkeypatch.setattr(init_mod, "_repo_root", lambda: repo_root)
-
-    # Provide token via getpass mock
     monkeypatch.setattr("getpass.getpass", lambda _prompt="": "tok-valid-token")
+    monkeypatch.setattr(builtins, "input", _answer_sequence(_minimal_answers()))
 
-    answers = _minimal_answers()
-    monkeypatch.setattr(builtins, "input", _answer_sequence(answers))
-
-    rc = run_init(["--config-dir", str(config_dir)])
+    rc = run_init(["--repo-root", str(repo_root)])
     assert rc == 0
 
-    assert (config_dir / "config.yaml").exists()
-    assert (config_dir / "rules.yaml").exists()
-    assert (config_dir / "prompts" / "hyacine.md").exists()
-    env_file = config_dir / "hyacine.env"
+    assert (repo_root / "config" / "config.yaml").exists()
+    assert (repo_root / "config" / "rules.yaml").exists()
+    assert (repo_root / "prompts" / "hyacine.md").exists()
+    env_file = repo_root / ".env"
     assert env_file.exists()
 
-    # hyacine.env must be chmod 600
     mode = stat.S_IMODE(env_file.stat().st_mode)
     assert oct(mode)[-3:] == "600", f"Expected 600, got {oct(mode)[-3:]}"
 
-    # Rendered prompt should contain the name
-    rendered = (config_dir / "prompts" / "hyacine.md").read_text(encoding="utf-8")
+    # Directories holding personal data should be 0700.
+    for sub in ("config", "prompts", "data"):
+        dir_mode = stat.S_IMODE((repo_root / sub).stat().st_mode)
+        assert oct(dir_mode)[-3:] == "700", (
+            f"Expected {sub}/ 700, got {oct(dir_mode)[-3:]}"
+        )
+
+    rendered = (repo_root / "prompts" / "hyacine.md").read_text(encoding="utf-8")
     assert "Alice" in rendered
 
 
-# ---------------------------------------------------------------------------
-# Integration: --no-prompt-token skips OAuth token prompt
-# ---------------------------------------------------------------------------
-
 def test_no_prompt_token(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    config_dir = tmp_path / "config"
-
     repo_root = tmp_path / "repo"
-    (repo_root / "prompts").mkdir(parents=True)
-    (repo_root / "prompts" / "hyacine.md.template").write_text(
-        "{{ name }}", encoding="utf-8"
-    )
-    (repo_root / "config").mkdir()
-    (repo_root / "config" / "rules.starter.yaml").write_text("rules: []\n", encoding="utf-8")
+    _setup_repo(repo_root)
 
-    import hyacine.cli.init as init_mod  # noqa: PLC0415
-
-    monkeypatch.setattr(init_mod, "_repo_root", lambda: repo_root)
-
-    # getpass should NOT be called
-    called = []
+    called: list[bool] = []
 
     def _no_getpass(_prompt: str = "") -> str:
         called.append(True)
         return "should-not-be-called"
 
     monkeypatch.setattr("getpass.getpass", _no_getpass)
+    monkeypatch.setattr(builtins, "input", _answer_sequence(_minimal_answers()))
 
-    answers = _minimal_answers()
-    monkeypatch.setattr(builtins, "input", _answer_sequence(answers))
-
-    rc = run_init(["--config-dir", str(config_dir), "--no-prompt-token"])
+    rc = run_init(["--repo-root", str(repo_root), "--no-prompt-token"])
     assert rc == 0
-    assert not called, "getpass should not have been called with --no-prompt-token"
+    assert not called
 
-    env_content = (config_dir / "hyacine.env").read_text(encoding="utf-8")
+    env_content = (repo_root / ".env").read_text(encoding="utf-8")
     assert "CLAUDE_CODE_OAUTH_TOKEN=" in env_content
 
 
-# ---------------------------------------------------------------------------
-# Integration: --overwrite backs up existing files and replaces
-# ---------------------------------------------------------------------------
-
 def test_overwrite_backs_up(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    config_dir = tmp_path / "config"
-    config_dir.mkdir(parents=True)
+    repo_root = tmp_path / "repo"
+    _setup_repo(repo_root)
 
-    # Pre-create a config.yaml
-    existing = config_dir / "config.yaml"
+    existing = repo_root / "config" / "config.yaml"
     existing.write_text("recipient_email: old@example.com\n", encoding="utf-8")
 
-    repo_root = tmp_path / "repo"
-    (repo_root / "prompts").mkdir(parents=True)
-    (repo_root / "prompts" / "hyacine.md.template").write_text(
-        "{{ name }}", encoding="utf-8"
-    )
-    (repo_root / "config").mkdir()
-    (repo_root / "config" / "rules.starter.yaml").write_text("rules: []\n", encoding="utf-8")
-
-    import hyacine.cli.init as init_mod  # noqa: PLC0415
-
-    monkeypatch.setattr(init_mod, "_repo_root", lambda: repo_root)
     monkeypatch.setattr("getpass.getpass", lambda _prompt="": "tok-new")
+    monkeypatch.setattr(builtins, "input", _answer_sequence(_minimal_answers()))
 
-    answers = _minimal_answers()
-    monkeypatch.setattr(builtins, "input", _answer_sequence(answers))
-
-    rc = run_init(["--config-dir", str(config_dir), "--overwrite"])
+    rc = run_init(["--repo-root", str(repo_root), "--overwrite"])
     assert rc == 0
 
-    # A backup file should exist
-    bak_files = list(config_dir.glob("config.yaml.bak-*"))
+    bak_files = list((repo_root / "config").glob("config.yaml.bak-*"))
     assert bak_files, "Expected a backup file for config.yaml"
     bak_content = bak_files[0].read_text(encoding="utf-8")
     assert "old@example.com" in bak_content
 
-    # New config should have the wizard's answer
     new_content = existing.read_text(encoding="utf-8")
     assert "alice@example.com" in new_content
 
 
-# ---------------------------------------------------------------------------
-# Integration: skip all when user chooses [s]
-# ---------------------------------------------------------------------------
-
 def test_skip_all_existing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    config_dir = tmp_path / "config"
-    config_dir.mkdir(parents=True)
-    config_dir.chmod(0o700)
+    repo_root = tmp_path / "repo"
+    _setup_repo(repo_root)
 
     # Pre-create all target files
-    for name in ["hyacine.env", "config.yaml", "rules.yaml"]:
-        (config_dir / name).write_text("# existing\n", encoding="utf-8")
-    (config_dir / "prompts").mkdir(exist_ok=True)
-    (config_dir / "prompts" / "hyacine.md").write_text("# existing prompt\n", encoding="utf-8")
+    (repo_root / ".env").write_text("# existing\n", encoding="utf-8")
+    (repo_root / "config" / "config.yaml").write_text("# existing\n", encoding="utf-8")
+    (repo_root / "config" / "rules.yaml").write_text("# existing\n", encoding="utf-8")
+    (repo_root / "prompts" / "hyacine.md").write_text("# existing prompt\n", encoding="utf-8")
 
-    repo_root = tmp_path / "repo"
-    (repo_root / "prompts").mkdir(parents=True)
-    (repo_root / "prompts" / "hyacine.md.template").write_text("{{ name }}", encoding="utf-8")
-    (repo_root / "config").mkdir()
-    (repo_root / "config" / "rules.starter.yaml").write_text("rules: []\n", encoding="utf-8")
-
-    import hyacine.cli.init as init_mod  # noqa: PLC0415
-
-    monkeypatch.setattr(init_mod, "_repo_root", lambda: repo_root)
-
-    # User picks 's' at first prompt → skip all
     monkeypatch.setattr(builtins, "input", _answer_sequence(["s"]))
 
-    rc = run_init(["--config-dir", str(config_dir)])
+    rc = run_init(["--repo-root", str(repo_root)])
     assert rc == 0
 
-    # Existing files should be unchanged
-    assert (config_dir / "config.yaml").read_text() == "# existing\n"
+    assert (repo_root / "config" / "config.yaml").read_text() == "# existing\n"
 
-
-# ---------------------------------------------------------------------------
-# Integration: ZoneInfo validation rejects garbage tz names
-# ---------------------------------------------------------------------------
 
 def test_bad_timezone_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    config_dir = tmp_path / "config"
-
     repo_root = tmp_path / "repo"
-    (repo_root / "prompts").mkdir(parents=True)
-    (repo_root / "prompts" / "hyacine.md.template").write_text("{{ name }}", encoding="utf-8")
-    (repo_root / "config").mkdir()
-    (repo_root / "config" / "rules.starter.yaml").write_text("rules: []\n", encoding="utf-8")
+    _setup_repo(repo_root)
 
-    import hyacine.cli.init as init_mod  # noqa: PLC0415
-
-    monkeypatch.setattr(init_mod, "_repo_root", lambda: repo_root)
     monkeypatch.setattr("getpass.getpass", lambda _prompt="": "tok-abc")
 
-    # First timezone answer is garbage, second is valid
     answers_with_bad_tz = [
         "Alice",
         "PM at Acme",
@@ -396,10 +418,10 @@ def test_bad_timezone_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     ]
     monkeypatch.setattr(builtins, "input", _answer_sequence(answers_with_bad_tz))
 
-    rc = run_init(["--config-dir", str(config_dir)])
+    rc = run_init(["--repo-root", str(repo_root)])
     assert rc == 0
 
-    config_content = (config_dir / "config.yaml").read_text(encoding="utf-8")
+    config_content = (repo_root / "config" / "config.yaml").read_text(encoding="utf-8")
     assert "UTC" in config_content
 
 

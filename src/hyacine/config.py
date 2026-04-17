@@ -1,19 +1,23 @@
-"""Settings loader — env-first, XDG paths, then legacy in-repo fallback.
+"""Settings loader — env-first, all paths anchored to the repo root.
 
-Env variables are authoritative for secrets and paths. YAML carries the
+Env variables carry secrets and optional path overrides. YAML carries the
 non-secret operational config (recipient, timezone, run_time, etc) so it can
 be edited via the Web UI and snapshotted.
 
-Path resolution algorithm for each derived path:
-1. If env var ``HYACINE_<NAME>_PATH`` is set → use that (pydantic-settings handles this).
-2. Else check XDG path; if it exists → use it.
-3. Else check legacy in-repo path; if it exists → use it (back-compat).
-4. Else return XDG path (new install; wizard will create it).
+Repo root resolution (in order):
+    1. HYACINE_REPO_ROOT env var, if set (absolute path).
+    2. Module location: ``Path(__file__).parents[2]`` — works for editable
+       installs where the repo is cloned and ``uv sync`` was run.
 
-XDG directories:
-- config_dir = $XDG_CONFIG_HOME/hyacine/  (default ~/.config/hyacine/)
-- state_dir  = $XDG_STATE_HOME/hyacine/   (default ~/.local/state/hyacine/)
-- cache_dir  = $XDG_CACHE_HOME/hyacine/   (reserved; not yet used)
+All derived paths default to locations under the repo root:
+    config_path = <repo_root>/config/config.yaml
+    rules_path  = <repo_root>/config/rules.yaml
+    prompt_path = <repo_root>/prompts/hyacine.md
+    db_path     = <repo_root>/data/hyacine.db
+    auth_dir    = <repo_root>/data/auth
+    log_dir     = <repo_root>/data/logs
+
+Any individual path can still be overridden by setting ``HYACINE_<NAME>_PATH``.
 """
 from __future__ import annotations
 
@@ -26,27 +30,27 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Sentinel: a Path value that is never a real user path; used as the default
 # so the model_validator can detect "this field was not set by the caller or
-# an env var" and apply the XDG/legacy resolution algorithm.
+# an env var" and fill in the in-repo default.
 _UNSET = Path("/.__hyacine_path_unset__")
 
 
-def _xdg_config_home() -> Path:
-    raw = os.environ.get("XDG_CONFIG_HOME", "")
-    return Path(raw) if raw else Path.home() / ".config"
+def _default_repo_root() -> Path:
+    """Resolve the default repo root at Settings-instantiation time.
+
+    Runs on every ``Settings()`` call so tests (and unusual deploys) can
+    flip ``HYACINE_REPO_ROOT`` between instantiations.
+    """
+    env_override = os.environ.get("HYACINE_REPO_ROOT", "").strip()
+    if env_override:
+        return Path(env_override).expanduser().resolve()
+    # src/hyacine/config.py → parents[2] = repo root (editable install).
+    return Path(__file__).resolve().parents[2]
 
 
-def _xdg_state_home() -> Path:
-    raw = os.environ.get("XDG_STATE_HOME", "")
-    return Path(raw) if raw else Path.home() / ".local" / "state"
-
-
-def _resolve_path(xdg_path: Path, legacy_path: Path) -> Path:
-    """Return xdg_path or legacy_path — whichever exists — else xdg_path."""
-    if xdg_path.exists():
-        return xdg_path
-    if legacy_path.exists():
-        return legacy_path
-    return xdg_path
+# Evaluated once at import time to anchor the .env path, which pydantic
+# reads before the model validator runs. A different .env can still be
+# selected per-instantiation via ``Settings(_env_file=...)``.
+_STATIC_REPO_ROOT = _default_repo_root()
 
 
 class Settings(BaseSettings):
@@ -54,10 +58,7 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix="HYACINE_",
-        env_file=(
-            str(Path.home() / ".config" / "hyacine" / "hyacine.env"),
-            ".env",
-        ),
+        env_file=str(_STATIC_REPO_ROOT / ".env"),
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -71,11 +72,7 @@ class Settings(BaseSettings):
     ntfy_topic: str = ""
     healthchecks_uuid: str = ""
 
-    # XDG base directories — _UNSET means "let the validator fill it in"
-    config_dir: Path = _UNSET
-    state_dir: Path = _UNSET
-
-    # Derived paths — _UNSET means "resolve via XDG/legacy heuristic"
+    # Derived paths — _UNSET means "use in-repo default"
     config_path: Path = _UNSET
     rules_path: Path = _UNSET
     prompt_path: Path = _UNSET
@@ -86,57 +83,21 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _resolve_paths(self) -> Settings:
-        xdg_cfg = _xdg_config_home() / "hyacine"
-        xdg_state = _xdg_state_home() / "hyacine"
-
-        if self.config_dir == _UNSET:
-            self.config_dir = xdg_cfg
-        if self.state_dir == _UNSET:
-            self.state_dir = xdg_state
-
+        repo_root = _default_repo_root()
         if self.config_path == _UNSET:
-            self.config_path = _resolve_path(
-                xdg_cfg / "config.yaml",
-                Path("./config/config.yaml"),
-            )
-
+            self.config_path = repo_root / "config" / "config.yaml"
         if self.rules_path == _UNSET:
-            self.rules_path = _resolve_path(
-                xdg_cfg / "rules.yaml",
-                Path("./config/rules.yaml"),
-            )
-
-        # Rendered briefing prompt filename stays `briefing.md` — the word
-        # describes what the file is (a briefing prompt) independent of the
-        # project name. Operators reading ~/.config/hyacine/prompts/ see a
-        # self-documenting filename.
+            self.rules_path = repo_root / "config" / "rules.yaml"
         if self.prompt_path == _UNSET:
-            self.prompt_path = _resolve_path(
-                xdg_cfg / "prompts" / "briefing.md",
-                Path("./prompts/briefing.md"),
-            )
-
+            self.prompt_path = repo_root / "prompts" / "hyacine.md"
         if self.db_path == _UNSET:
-            self.db_path = _resolve_path(
-                xdg_state / "hyacine.db",
-                Path("./data/briefing.db"),
-            )
-
+            self.db_path = repo_root / "data" / "hyacine.db"
         if self.auth_dir == _UNSET:
-            self.auth_dir = _resolve_path(
-                xdg_state / "auth",
-                Path.home() / ".local" / "share" / "hyacine",
-            )
-
+            self.auth_dir = repo_root / "data" / "auth"
         if self.log_dir == _UNSET:
-            self.log_dir = _resolve_path(
-                xdg_state / "logs",
-                Path("./data/logs"),
-            )
-
+            self.log_dir = repo_root / "data" / "logs"
         if self.auth_record_path == _UNSET:
             self.auth_record_path = self.auth_dir / "auth_record.json"
-
         return self
 
     @property

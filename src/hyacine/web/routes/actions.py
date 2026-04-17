@@ -1,8 +1,8 @@
 """POST /actions/run — trigger an ad-hoc run.
 
 Tries `systemctl --user start hyacine-run.service` first. Falls back to a
-detached `python -m hyacine.pipeline.briefing` when systemd user isn't
-available (e.g. plain WSL shells without `loginctl enable-linger`).
+detached `python -m hyacine.pipeline.run` when systemd user isn't available
+(e.g. plain WSL shells without `loginctl enable-linger`).
 """
 from __future__ import annotations
 
@@ -49,7 +49,7 @@ def _try_systemctl() -> str | None:
 def _spawn_subprocess() -> str:
     """Detach a background python process and return 'subprocess'."""
     subprocess.Popen(
-        [sys.executable, "-m", "hyacine.pipeline.briefing"],
+        [sys.executable, "-m", "hyacine.pipeline.run"],
         start_new_session=True,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,

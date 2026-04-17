@@ -9,7 +9,7 @@ from fastapi.responses import HTMLResponse
 from sqlalchemy import select
 
 from hyacine.config import YamlConfig, load_yaml_config
-from hyacine.db import BriefingRun, session_scope
+from hyacine.db import Run, session_scope
 from hyacine.web.utils import get_settings_from_request
 
 router = APIRouter()
@@ -34,7 +34,7 @@ def dashboard(request: Request) -> HTMLResponse:
 
     with session_scope(settings.db_path) as session:
         rows = session.execute(
-            select(BriefingRun).order_by(BriefingRun.started_at.desc()).limit(50)
+            select(Run).order_by(Run.started_at.desc()).limit(50)
         ).scalars().all()
 
     runs = [

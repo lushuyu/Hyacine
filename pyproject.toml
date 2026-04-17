@@ -1,7 +1,7 @@
 [project]
 name = "hyacine"
 version = "0.1.0"
-description = "Daily Outlook-to-Claude email briefing system"
+description = "Hyacine — daily Outlook + Claude report delivered to your inbox"
 requires-python = ">=3.11,<3.13"
 dependencies = [
     "azure-identity>=1.19,<2",
@@ -13,6 +13,7 @@ dependencies = [
     "sqlalchemy>=2.0,<3",
     "pydantic>=2.9,<3",
     "pydantic-settings>=2.4",
+    "python-dotenv>=1.0",
     "pyyaml>=6.0",
     "markdown>=3.5",
     "bleach>=6.1",

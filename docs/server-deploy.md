@@ -27,7 +27,7 @@ host — that is, the wizard has run and Graph OAuth is bootstrapped.
 ## 2. Install
 
 ```bash
-git clone https://github.com/<user>/hyacine ~/hyacine
+git clone https://github.com/lushuyu/Hyacine ~/hyacine
 cd ~/hyacine
 uv sync
 python -m hyacine init
@@ -43,7 +43,7 @@ uv run ruff check . && uv run mypy src/ && uv run pytest -q
 
 ## 3. Secrets
 
-`~/.config/hyacine/hyacine.env` (chmod 600) contains:
+`~/hyacine/.env` (chmod 600) contains:
 
 ```bash
 CLAUDE_CODE_OAUTH_TOKEN=<from `claude setup-token` on this host>
@@ -58,7 +58,9 @@ enough for a daily cadence.
 
 ## 4. systemd user units
 
-The unit files live in `src/hyacine/ops/systemd/`. Install them:
+The unit files live in `src/hyacine/ops/systemd/`. They assume the repo is at
+`~/hyacine`; if yours lives elsewhere, edit `WorkingDirectory=`,
+`EnvironmentFile=`, `ExecStart=`, and `ReadWritePaths=` after copying.
 
 ```bash
 mkdir -p ~/.config/systemd/user
@@ -82,8 +84,7 @@ systemctl --user start hyacine-run.service
 journalctl --user -u hyacine-run.service -f
 ```
 
-You should see `OK: sent=<id> emails=<N>` and receive a briefing in your
-inbox.
+You should see `OK: sent=<id> emails=<N>` and receive a report in your inbox.
 
 ## 5. Exposing the Web UI
 
@@ -126,15 +127,15 @@ systemctl --user restart hyacine-web.service
 The timer does not need a restart unless the unit file itself changed. A
 `daemon-reload` is only necessary if you modified unit files.
 
-Your personal state in `~/.config/hyacine/` and `~/.local/state/hyacine/` is
-untouched by `git pull`.
+Your personal state (`./.env`, `./config/*.yaml`, `./prompts/hyacine.md`,
+`./data/`) is gitignored and untouched by `git pull`.
 
 ## 7. Backups
 
 The SQLite database is small (kilobytes to megabytes). Simple nightly backup:
 
 ```bash
-sqlite3 ~/.local/state/hyacine/hyacine.db \
+sqlite3 ~/hyacine/data/hyacine.db \
     ".backup ~/hyacine-backups/hyacine-$(date +%F).db"
 ```
 
@@ -144,10 +145,11 @@ rollback scenario.
 ## 8. Revoking access
 
 - **OAuth for Claude Code**: revoke via the Anthropic dashboard. Regenerate
-  with `claude setup-token` and update `hyacine.env`.
+  with `claude setup-token` and update `./.env`.
 - **Microsoft Graph tokens**: revoke the session via the Microsoft 365 admin
-  console or your own account security page. Delete
-  `~/.local/state/hyacine/auth/` and re-run `bootstrap_auth.py` to re-authorise.
+  console or your own account security page. Delete `./data/auth/` and
+  `~/.IdentityService/hyacine_cache*`, then re-run `bootstrap_auth.py` to
+  re-authorise.
 
 ## 9. Uninstall
 
@@ -157,9 +159,6 @@ systemctl --user disable --now hyacine-web.service
 rm ~/.config/systemd/user/hyacine-{web,run}.*
 systemctl --user daemon-reload
 
-# Optional: remove all user data
-rm -rf ~/.config/hyacine ~/.local/state/hyacine ~/.cache/hyacine
-
-# Remove the code
-rm -rf ~/hyacine
+# Remove the code + all user data
+rm -rf ~/hyacine ~/.IdentityService/hyacine_cache*
 ```

@@ -1,5 +1,5 @@
-{# Jinja2 template for the per-user briefing system prompt.
-   Rendered by `python -m hyacine init` into ~/.config/hyacine/prompts/briefing.md.
+{# Jinja2 template for the per-user hyacine system prompt.
+   Rendered by `python -m hyacine init` into ./prompts/hyacine.md.
    The rendered file is what the pipeline passes to `claude -p --append-system-prompt-file`.
 
    Placeholders — all collected by the wizard:

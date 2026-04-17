@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Briefing · Run {{ run.id }}{% endblock %}
+{% block title %}Hyacine · Run {{ run.id }}{% endblock %}
 {% block content %}
 <h1>Run {{ run.id }} — <span class="status-{{ run.status }}">{{ run.status }}</span></h1>
 <p>
@@ -10,10 +10,10 @@
 <strong>HC ping:</strong> {{ run.hc_ping_result }}
 </p>
 
-{% if run.briefing_markdown %}
-<h2>Rendered briefing</h2>
+{% if run.markdown %}
+<h2>Rendered report</h2>
 <div>{{ rendered_html | safe }}</div>
-<details><summary>Raw markdown</summary><pre>{{ run.briefing_markdown }}</pre></details>
+<details><summary>Raw markdown</summary><pre>{{ run.markdown }}</pre></details>
 {% endif %}
 
 {% if run.error_traceback %}
