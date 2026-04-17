@@ -4,7 +4,7 @@
 >
 > Microsoft Outlook mail + calendar → Claude Code LLM → summary email delivered to your own inbox.
 
-[![CI](https://github.com/<user>/hyacine/actions/workflows/ci.yml/badge.svg)](https://github.com/<user>/hyacine/actions/workflows/ci.yml)
+[![CI](https://github.com/lushuyu/Hyacine/actions/workflows/ci.yml/badge.svg)](https://github.com/lushuyu/Hyacine/actions/workflows/ci.yml)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![python](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue)](pyproject.toml)
 
@@ -24,7 +24,7 @@ conflicts with your customisations and the same clone can serve multiple account
 ## Quickstart
 
 ```bash
-git clone https://github.com/<user>/hyacine ~/hyacine
+git clone https://github.com/lushuyu/Hyacine ~/hyacine
 cd ~/hyacine
 uv sync
 python -m hyacine init          # interactive wizard — writes config + prompt
