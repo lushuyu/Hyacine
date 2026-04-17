@@ -21,7 +21,10 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=%h/hyacine/data %h/hyacine/prompts %h/hyacine/config
+# %h/.IdentityService is where msal-extensions persists the Graph token
+# cache (path is not relocatable). Without it writable, MSAL can't refresh
+# the token and Graph auth silently dies on next refresh.
+ReadWritePaths=%h/hyacine/data %h/hyacine/prompts %h/hyacine/config %h/.IdentityService
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true

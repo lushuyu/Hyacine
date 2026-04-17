@@ -228,7 +228,14 @@ _REQUIRED_SERVICE_DIRECTIVES = [
     "UnsetEnvironment=ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN",
     "EnvironmentFile=%h/hyacine/.env",
     "WorkingDirectory=%h/hyacine",
-    "ReadWritePaths=%h/hyacine/data %h/hyacine/prompts %h/hyacine/config",
+    # ReadWritePaths must cover our repo state AND MSAL's non-relocatable
+    # token cache at ~/.IdentityService/. Split assertions keep the test
+    # robust if the ordering or spacing of the directive changes.
+    "ReadWritePaths=",
+    "%h/hyacine/data",
+    "%h/hyacine/prompts",
+    "%h/hyacine/config",
+    "%h/.IdentityService",
     "NoNewPrivileges=true",
     "PrivateTmp=true",
     "ProtectSystem=strict",
