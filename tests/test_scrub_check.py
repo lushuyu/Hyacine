@@ -164,3 +164,34 @@ def test_email_domain_detected(tmp_path: Path) -> None:
     result = _run_scrub(tmp_path)
     assert result.returncode == 1
     assert "config/rules.yaml" in result.stdout
+
+
+def test_public_project_url_line_allowlisted(tmp_path: Path) -> None:
+    """Lines containing the canonical public project URL are exempt."""
+    _git_init(tmp_path)
+    _git_add_commit(tmp_path, {
+        "README.md": (
+            "[![CI](https://github.com/lushuyu/Hyacine/actions/workflows/"
+            "ci.yml/badge.svg)](https://github.com/lushuyu/Hyacine/actions)\n"
+            "git clone https://github.com/lushuyu/Hyacine ~/hyacine\n"
+        ),
+    })
+    result = _run_scrub(tmp_path)
+    assert result.returncode == 0, (
+        f"Expected 0 (project URL allowlisted), got {result.returncode}.\n"
+        f"stdout: {result.stdout}"
+    )
+
+
+def test_bare_lushuyu_still_flagged_in_readme(tmp_path: Path) -> None:
+    """The URL allowlist must not leak into unrelated lines in the same file."""
+    _git_init(tmp_path)
+    _git_add_commit(tmp_path, {
+        "README.md": (
+            "Link: https://github.com/lushuyu/Hyacine\n"
+            "Authored by lushuyu for personal stuff.\n"
+        ),
+    })
+    result = _run_scrub(tmp_path)
+    assert result.returncode == 1
+    assert "Authored by lushuyu" in result.stdout

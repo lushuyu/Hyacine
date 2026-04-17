@@ -54,6 +54,14 @@ _ALLOWLIST_PATH_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"^docs/examples/h200"),
 ]
 
+# Lines containing any of these substrings are exempt from scanning.
+# Use this for the repo's own canonical public URLs — the GitHub owner name
+# is by definition public once the repo is published, and README / docs need
+# to reference it for badges and clone instructions.
+_ALLOWLIST_LINE_SUBSTRINGS: list[str] = [
+    "github.com/lushuyu/hyacine",
+]
+
 # Per-file allowed keywords (the match is fine if the line contains ONLY these
 # keywords from our pattern and the file is in this dict)
 _ALLOWLIST_FILE_KEYWORDS: dict[str, list[str]] = {
@@ -72,6 +80,12 @@ def _is_allowlisted(rel_path: str, line: str, match: re.Match[str]) -> bool:
     # Pattern-based path allowlist
     for pat in _ALLOWLIST_PATH_PATTERNS:
         if pat.match(rel_path):
+            return True
+
+    # Line-content allowlist — covers the canonical public project URL.
+    line_lower = line.lower()
+    for substr in _ALLOWLIST_LINE_SUBSTRINGS:
+        if substr.lower() in line_lower:
             return True
 
     # Per-file keyword allowlist
