@@ -151,12 +151,33 @@ def _migrate_legacy_schema(db_path: Path) -> None:
 
 
 def init_db(db_path: Path) -> None:
-    """Create tables and set PRAGMAs. Idempotent; migrates legacy schema."""
+    """Create tables and set PRAGMAs. Idempotent; migrates legacy schema.
+
+    Also tightens filesystem perms: the parent dir is chmod 0700 and the
+    DB file (plus any WAL/SHM siblings) chmod 0600, so the local database
+    — which holds run history and generated markdown — is not readable by
+    other users on shared systems. Best-effort on filesystems that don't
+    support POSIX modes.
+    """
     db_path.parent.mkdir(parents=True, exist_ok=True)
     _migrate_legacy_file(db_path)
     _migrate_legacy_schema(db_path)
     engine = get_engine(db_path)
     Base.metadata.create_all(engine)
+
+    try:
+        db_path.parent.chmod(0o700)
+    except OSError:
+        pass
+    for suffix in ("", "-shm", "-wal"):
+        candidate = (
+            db_path if not suffix else db_path.with_name(db_path.name + suffix)
+        )
+        if candidate.exists():
+            try:
+                candidate.chmod(0o600)
+            except OSError:
+                pass
 
 
 @contextmanager

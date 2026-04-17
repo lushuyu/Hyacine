@@ -408,6 +408,15 @@ def run_init(argv: list[str] | None = None) -> int:  # noqa: C901
     prompts_dir.mkdir(parents=True, exist_ok=True)
     data_dir.mkdir(parents=True, exist_ok=True)
 
+    # Tighten directory perms: data/ holds the DB with run history and
+    # generated markdown; prompts/ and config/ hold personal identity +
+    # operational settings. 0700 means only the owner can traverse.
+    for directory in (config_dir, prompts_dir, data_dir):
+        try:
+            directory.chmod(0o700)
+        except OSError:
+            pass
+
     skip_all = False
     resolutions: dict[str, str] = {}
 

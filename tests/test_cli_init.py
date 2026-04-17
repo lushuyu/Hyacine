@@ -295,6 +295,13 @@ def test_fresh_run_writes_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     mode = stat.S_IMODE(env_file.stat().st_mode)
     assert oct(mode)[-3:] == "600", f"Expected 600, got {oct(mode)[-3:]}"
 
+    # Directories holding personal data should be 0700.
+    for sub in ("config", "prompts", "data"):
+        dir_mode = stat.S_IMODE((repo_root / sub).stat().st_mode)
+        assert oct(dir_mode)[-3:] == "700", (
+            f"Expected {sub}/ 700, got {oct(dir_mode)[-3:]}"
+        )
+
     rendered = (repo_root / "prompts" / "hyacine.md").read_text(encoding="utf-8")
     assert "Alice" in rendered
 

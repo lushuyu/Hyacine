@@ -1,22 +1,27 @@
-"""Settings loader — env-first, all paths relative to the repo.
+"""Settings loader — env-first, all paths anchored to the repo root.
 
 Env variables carry secrets and optional path overrides. YAML carries the
 non-secret operational config (recipient, timezone, run_time, etc) so it can
 be edited via the Web UI and snapshotted.
 
-All derived paths default to in-repo locations:
-    config_path = ./config/config.yaml
-    rules_path  = ./config/rules.yaml
-    prompt_path = ./prompts/hyacine.md
-    db_path     = ./data/hyacine.db
-    auth_dir    = ./data/auth
-    log_dir     = ./data/logs
+Repo root resolution (in order):
+    1. HYACINE_REPO_ROOT env var, if set (absolute path).
+    2. Module location: ``Path(__file__).parents[2]`` — works for editable
+       installs where the repo is cloned and ``uv sync`` was run.
 
-Any path can be overridden per-user by setting the corresponding env var
-``HYACINE_<NAME>_PATH`` (e.g. ``HYACINE_DB_PATH=/mnt/fast/hyacine.db``).
+All derived paths default to locations under the repo root:
+    config_path = <repo_root>/config/config.yaml
+    rules_path  = <repo_root>/config/rules.yaml
+    prompt_path = <repo_root>/prompts/hyacine.md
+    db_path     = <repo_root>/data/hyacine.db
+    auth_dir    = <repo_root>/data/auth
+    log_dir     = <repo_root>/data/logs
+
+Any individual path can still be overridden by setting ``HYACINE_<NAME>_PATH``.
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import yaml
@@ -29,12 +34,31 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 _UNSET = Path("/.__hyacine_path_unset__")
 
 
+def _default_repo_root() -> Path:
+    """Resolve the default repo root at Settings-instantiation time.
+
+    Runs on every ``Settings()`` call so tests (and unusual deploys) can
+    flip ``HYACINE_REPO_ROOT`` between instantiations.
+    """
+    env_override = os.environ.get("HYACINE_REPO_ROOT", "").strip()
+    if env_override:
+        return Path(env_override).expanduser().resolve()
+    # src/hyacine/config.py → parents[2] = repo root (editable install).
+    return Path(__file__).resolve().parents[2]
+
+
+# Evaluated once at import time to anchor the .env path, which pydantic
+# reads before the model validator runs. A different .env can still be
+# selected per-instantiation via ``Settings(_env_file=...)``.
+_STATIC_REPO_ROOT = _default_repo_root()
+
+
 class Settings(BaseSettings):
     """Environment-driven settings — prefix HYACINE_ unless noted."""
 
     model_config = SettingsConfigDict(
         env_prefix="HYACINE_",
-        env_file=".env",
+        env_file=str(_STATIC_REPO_ROOT / ".env"),
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -59,18 +83,19 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _resolve_paths(self) -> Settings:
+        repo_root = _default_repo_root()
         if self.config_path == _UNSET:
-            self.config_path = Path("./config/config.yaml")
+            self.config_path = repo_root / "config" / "config.yaml"
         if self.rules_path == _UNSET:
-            self.rules_path = Path("./config/rules.yaml")
+            self.rules_path = repo_root / "config" / "rules.yaml"
         if self.prompt_path == _UNSET:
-            self.prompt_path = Path("./prompts/hyacine.md")
+            self.prompt_path = repo_root / "prompts" / "hyacine.md"
         if self.db_path == _UNSET:
-            self.db_path = Path("./data/hyacine.db")
+            self.db_path = repo_root / "data" / "hyacine.db"
         if self.auth_dir == _UNSET:
-            self.auth_dir = Path("./data/auth")
+            self.auth_dir = repo_root / "data" / "auth"
         if self.log_dir == _UNSET:
-            self.log_dir = Path("./data/logs")
+            self.log_dir = repo_root / "data" / "logs"
         if self.auth_record_path == _UNSET:
             self.auth_record_path = self.auth_dir / "auth_record.json"
         return self
