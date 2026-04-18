@@ -12,6 +12,11 @@ Wants=network-online.target
 Type=oneshot
 WorkingDirectory=%h/hyacine
 EnvironmentFile=%h/hyacine/.env
+# systemd's default user PATH omits ~/.local/bin, where the official Claude
+# Code installer drops the `claude` binary. Pin PATH so the subprocess in
+# hyacine.llm.claude_code can resolve it. (HYACINE_CLAUDE_BIN in .env wins
+# over PATH if the operator wants to point at a non-default location.)
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 UnsetEnvironment=ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN
 # No Restart= on oneshot — the timer's Persistent=true handles missed runs.
 ExecStart=%h/hyacine/.venv/bin/python -m hyacine.pipeline.run
@@ -31,5 +36,9 @@ ProtectControlGroups=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 RestrictNamespaces=true
 LockPersonality=true
-MemoryDenyWriteExecute=true
+# MemoryDenyWriteExecute disabled: claude 2.1.x ships as a single ELF binary
+# with embedded JIT. W^X enforcement traps the JIT and the subprocess dies
+# with SIGTRAP (empty stdout/stderr, no useful diagnostics). Re-enable only
+# if upstream ever switches to an AOT runtime.
+# MemoryDenyWriteExecute=true
 SystemCallArchitectures=native

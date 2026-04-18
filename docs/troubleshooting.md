@@ -89,6 +89,22 @@ Inspect the full error dict in the traceback. Common causes:
 - **Model name invalid**. Check `llm_model` in `config.yaml`.
 - **Token revoked**. Regenerate with `claude setup-token`.
 
+### `FileNotFoundError: 'claude'` under systemd
+
+systemd user units run with a minimal default PATH that excludes
+`~/.local/bin`, where the official Claude Code installer drops the binary.
+The shipped `hyacine-run.service` template pins `Environment=PATH=` to
+include it. If you're on an old copy, either redeploy the unit or set
+`HYACINE_CLAUDE_BIN=/absolute/path/to/claude` in `./.env`.
+
+### Subprocess exits with empty stdout/stderr (SIGTRAP)
+
+`claude` 2.1.x ships as a single ELF binary with embedded JIT.
+`MemoryDenyWriteExecute=true` in the systemd unit traps the runtime when it
+tries to mark JIT pages writable+executable, killing the process with
+SIGTRAP and no diagnostics. The shipped template leaves MDWE off — if you
+hand-rolled your unit, comment that line out.
+
 ### Subprocess billed to the wrong account
 
 `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` leaked into the unit
