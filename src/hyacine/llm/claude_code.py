@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -29,6 +30,35 @@ def build_env(base_env: dict[str, str]) -> dict[str, str]:
     env.pop("ANTHROPIC_API_KEY", None)
     env.pop("ANTHROPIC_AUTH_TOKEN", None)
     return env
+
+
+def resolve_claude_bin(env: dict[str, str] | None = None) -> str:
+    """Locate the `claude` CLI as an absolute path.
+
+    Order: explicit `HYACINE_CLAUDE_BIN` env var, then `shutil.which` against an
+    augmented PATH that includes `~/.local/bin` (npm/uv default install dir
+    that systemd user units omit by default).
+    """
+    src = env if env is not None else os.environ
+    override = src.get("HYACINE_CLAUDE_BIN")
+    if override:
+        if not (os.path.isfile(override) and os.access(override, os.X_OK)):
+            raise ClaudeCodeError(
+                f"HYACINE_CLAUDE_BIN={override!r} is not an executable file."
+            )
+        return override
+
+    extra = os.path.expanduser("~/.local/bin")
+    path = src.get("PATH", os.defpath)
+    if extra not in path.split(os.pathsep):
+        path = f"{extra}{os.pathsep}{path}"
+    found = shutil.which("claude", path=path)
+    if not found:
+        raise ClaudeCodeError(
+            "claude CLI not found on PATH. Install Claude Code or set "
+            f"HYACINE_CLAUDE_BIN. Searched PATH={path!r}."
+        )
+    return found
 
 
 def build_argv(
@@ -84,6 +114,7 @@ def summarize(
         permission_mode=permission_mode,
     )
     env = build_env(os.environ.copy())
+    argv[0] = resolve_claude_bin(env)
 
     try:
         completed = subprocess.run(
@@ -146,4 +177,10 @@ def summarize(
     return str(result_event["result"])
 
 
-__all__ = ["summarize", "build_env", "build_argv", "ClaudeCodeError"]
+__all__ = [
+    "summarize",
+    "build_env",
+    "build_argv",
+    "resolve_claude_bin",
+    "ClaudeCodeError",
+]

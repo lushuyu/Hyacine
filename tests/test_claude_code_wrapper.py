@@ -11,6 +11,7 @@ from hyacine.llm.claude_code import (
     ClaudeCodeError,
     build_argv,
     build_env,
+    resolve_claude_bin,
     summarize,
 )
 
@@ -130,6 +131,61 @@ class TestBuildArgv:
         assert argv[idx + 1] == "haiku"
         idx_turns = argv.index("--max-turns")
         assert argv[idx_turns + 1] == "5"
+
+
+# ---------------------------------------------------------------------------
+# resolve_claude_bin
+# ---------------------------------------------------------------------------
+
+class TestResolveClaudeBin:
+    def _make_fake_claude(self, dir_: Path) -> Path:
+        bin_path = dir_ / "claude"
+        bin_path.write_text("#!/bin/sh\nexit 0\n")
+        bin_path.chmod(0o755)
+        return bin_path
+
+    def test_explicit_override_wins(self, tmp_path: Path) -> None:
+        bin_path = self._make_fake_claude(tmp_path)
+        env = {"HYACINE_CLAUDE_BIN": str(bin_path), "PATH": "/nope"}
+        assert resolve_claude_bin(env) == str(bin_path)
+
+    def test_override_not_executable_raises(self, tmp_path: Path) -> None:
+        bin_path = tmp_path / "claude"
+        bin_path.write_text("not executable")
+        env = {"HYACINE_CLAUDE_BIN": str(bin_path), "PATH": "/nope"}
+        with pytest.raises(ClaudeCodeError, match="not an executable"):
+            resolve_claude_bin(env)
+
+    def test_falls_back_to_path(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Point HOME at an empty dir so the ~/.local/bin augmentation can't
+        # accidentally find the developer's real claude install.
+        empty_home = tmp_path / "home"
+        empty_home.mkdir()
+        monkeypatch.setenv("HOME", str(empty_home))
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        bin_path = self._make_fake_claude(bin_dir)
+        env = {"PATH": str(bin_dir)}
+        assert resolve_claude_bin(env) == str(bin_path)
+
+    def test_local_bin_augmented(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Simulate ~/.local/bin holding the binary while PATH excludes it —
+        # this is the exact systemd default-PATH situation we are guarding against.
+        fake_home = tmp_path / "home"
+        local_bin = fake_home / ".local" / "bin"
+        local_bin.mkdir(parents=True)
+        bin_path = self._make_fake_claude(local_bin)
+        monkeypatch.setenv("HOME", str(fake_home))
+        env = {"PATH": "/usr/bin:/bin"}
+        assert resolve_claude_bin(env) == str(bin_path)
+
+    def test_missing_raises(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        empty = tmp_path / "empty"
+        empty.mkdir()
+        monkeypatch.setenv("HOME", str(empty))
+        env = {"PATH": str(empty)}
+        with pytest.raises(ClaudeCodeError, match="not found"):
+            resolve_claude_bin(env)
 
 
 # ---------------------------------------------------------------------------
