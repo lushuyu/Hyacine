@@ -193,6 +193,16 @@ class TestResolveClaudeBin:
 # ---------------------------------------------------------------------------
 
 class TestSummarize:
+    @pytest.fixture(autouse=True)
+    def _stub_claude_bin(self, tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
+        # `summarize()` resolves the claude binary before invoking subprocess.run.
+        # CI runners don't have claude installed, so point HYACINE_CLAUDE_BIN at a
+        # stub — the mocked subprocess.run never actually executes it.
+        stub = tmp_path_factory.mktemp("claude-stub") / "claude"
+        stub.write_text("#!/bin/sh\nexit 0\n")
+        stub.chmod(0o755)
+        monkeypatch.setenv("HYACINE_CLAUDE_BIN", str(stub))
+
     def test_parses_result_field_from_list(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Production path: `claude -p --output-format json` emits a list of events."""
         prompt_file = tmp_path / "prompt.md"
