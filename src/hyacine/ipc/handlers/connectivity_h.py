@@ -29,15 +29,32 @@ def _now_ms() -> int:
 
 
 def _dns_tcp(host: str, port: int = 443, timeout: float = 4.0) -> tuple[bool, str]:
+    """Resolve *host* (A and AAAA) and attempt a TCP connect.
+
+    Prefer :func:`socket.getaddrinfo` so an IPv6-only network — or a host
+    that only publishes AAAA records — still resolves cleanly.
+    ``create_connection`` walks the address list, so a single successful
+    connect short-circuits; we surface the address we actually reached in
+    the detail string so the UI can show whether it was IPv4 or IPv6.
+    """
     try:
-        ip = socket.gethostbyname(host)
+        infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
     except OSError as e:
         return False, f"DNS: {e}"
-    try:
-        with socket.create_connection((ip, port), timeout=timeout):
-            return True, f"{host} → {ip}:{port}"
-    except OSError as e:
-        return False, f"TCP: {e}"
+    if not infos:
+        return False, "DNS: no addresses"
+    last_err: str | None = None
+    for family, socktype, proto, _canon, sockaddr in infos:
+        try:
+            with socket.socket(family, socktype, proto) as sock:
+                sock.settimeout(timeout)
+                sock.connect(sockaddr)
+                ip = sockaddr[0]
+                return True, f"{host} → {ip}:{port}"
+        except OSError as e:
+            last_err = str(e)
+            continue
+    return False, f"TCP: {last_err or 'unreachable'}"
 
 
 def _default_claude_model() -> str:
