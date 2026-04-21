@@ -43,31 +43,39 @@
     results = { dns: null, claude: null, graph: null, sendmail: null };
     for (const k of kinds) running[k] = k !== 'sendmail' || sendmailEnabled;
 
-    // Run the independent probes concurrently so total wizard time tracks
-    // the slowest single request, not the sum. Each promise clears its own
-    // `running` flag on resolution so the UI can stream checkmarks in.
+    // Run independent probes concurrently so total wizard time tracks the
+    // slowest single request, not the sum. Every promise clears its own
+    // `running` flag via finally() — otherwise a rejection (sidecar not
+    // started, Rust command errored, etc.) would leave the UI spinning
+    // forever because the .then hand-off never runs.
+    const drive = <K extends ProbeKind>(k: K, p: Promise<ProbeResult>) =>
+      p
+        .then((r) => {
+          results[k] = r;
+        })
+        .catch((e: unknown) => {
+          results[k] = {
+            kind: k,
+            status: 'fail',
+            latency_ms: 0,
+            detail: String((e as Error)?.message ?? e)
+          };
+        })
+        .finally(() => {
+          running[k] = false;
+        });
+
     const tasks: Promise<void>[] = [
-      ipc.connectivity.probe('dns').then((r) => {
-        results.dns = r;
-        running.dns = false;
-      }),
-      ipc.cmd<ProbeResult>('rust_probe_claude').then((r) => {
-        results.claude = r;
-        running.claude = false;
-      }),
-      ipc.cmd<ProbeResult>('rust_probe_graph').then((r) => {
-        results.graph = r;
-        running.graph = false;
-      })
+      drive('dns', ipc.connectivity.probe('dns')),
+      drive('claude', ipc.cmd<ProbeResult>('rust_probe_claude')),
+      drive('graph', ipc.cmd<ProbeResult>('rust_probe_graph'))
     ];
     if (sendmailEnabled) {
       tasks.push(
-        ipc
-          .cmd<ProbeResult>('rust_probe_sendmail', { recipient: $wizard.delivery.email })
-          .then((r) => {
-            results.sendmail = r;
-            running.sendmail = false;
-          })
+        drive(
+          'sendmail',
+          ipc.cmd<ProbeResult>('rust_probe_sendmail', { recipient: $wizard.delivery.email })
+        )
       );
     }
     await Promise.allSettled(tasks);
