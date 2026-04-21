@@ -2,6 +2,7 @@
   import { goto } from '$app/navigation';
   import { onMount } from 'svelte';
   import { ipc, type ApiFormat, type ProbeResult, type ProviderPreset } from '$lib/ipc';
+  import { FALLBACK_PRESETS, formatError } from '$lib/provider-presets';
   import { pushToast, wizard } from '$lib/stores';
   import { t } from '$lib/i18n';
   import { isClaudeKey, maskKey } from '$lib/validators';
@@ -19,8 +20,13 @@
 
   // Catalogue loaded from the sidecar once on mount. We group by category
   // in the UI so the picker doesn't feel like a flat 50-item list.
-  let presets = $state<ProviderPreset[]>([]);
+  // Start with the bundled fallback so the picker is never empty, even
+  // when the sidecar is unreachable (fresh install without Python on PATH,
+  // sidecar crashed, slow first launch, etc). If providers.list succeeds
+  // we replace this with the authoritative Python-side list.
+  let presets = $state<ProviderPreset[]>(FALLBACK_PRESETS);
   let loadingPresets = $state(true);
+  let sidecarWarning = $state<string>('');
 
   // The currently picked preset id, or 'custom' for a user-supplied endpoint.
   let selectedId = $state<string>('claude-code-oauth');
@@ -57,14 +63,23 @@
   onMount(async () => {
     try {
       const res = await ipc.providers.list();
-      presets = res.providers;
+      if (res.providers?.length) {
+        presets = res.providers;
+      }
+    } catch (e) {
+      // Sidecar unreachable — stick with FALLBACK_PRESETS. Show a warning
+      // so the user knows live testing / custom config won't work until
+      // the sidecar comes back, but don't block them from picking a
+      // provider.
+      sidecarWarning = formatError(e);
+    }
+    try {
       const cur = await ipc.providers.current();
       if (cur.current?.id) selectedId = cur.current.id;
-    } catch (e) {
-      pushToast('error', `Failed to load providers: ${e}`);
-    } finally {
-      loadingPresets = false;
+    } catch {
+      /* current() also fails when the sidecar is down; keep default */
     }
+    loadingPresets = false;
     await refreshExistingKey();
   });
 
@@ -108,7 +123,7 @@
       if (testOk) pushToast('success', `Provider reachable (${res.latency_ms}ms)`);
     } catch (e) {
       testOk = false;
-      testDetail = String(e);
+      testDetail = formatError(e);
     } finally {
       testing = false;
     }
@@ -116,24 +131,33 @@
 
   async function next() {
     const trimmed = key.trim();
-    if (trimmed && validity.ok && slug !== 'custom') {
+    // Persist the key for every selection that has one — built-in slug
+    // or the stable 'custom' slug. Skipping custom meant pipeline runs
+    // could never find their credential.
+    if (trimmed && validity.ok) {
       await ipc.secrets.set(slug, trimmed);
       key = '';
     }
     try {
-      const fields: Record<string, unknown> = { llm_provider: selectedId };
+      // For custom endpoints we leave llm_provider empty and write the
+      // api_format + base_url directly — the Python resolve() helper
+      // picks those up. The preset path clears them so stale overrides
+      // can't shadow a fresh selection.
+      const fields: Record<string, unknown> = {};
       if (selectedId === 'custom') {
+        fields.llm_provider = '';
         fields.llm_api_format = customFormat;
         fields.llm_base_url = customBaseUrl;
         if (customModel) fields.llm_model = customModel;
       } else if (selectedPreset) {
-        fields.llm_base_url = '';
+        fields.llm_provider = selectedId;
         fields.llm_api_format = '';
+        fields.llm_base_url = '';
         fields.llm_model = selectedPreset.default_model;
       }
       await ipc.config.write(fields);
     } catch (e) {
-      pushToast('error', `Failed to save provider choice: ${e}`);
+      pushToast('error', `Failed to save provider choice: ${formatError(e)}`);
       return;
     }
 
@@ -185,6 +209,22 @@
     <h1 class="text-2xl font-semibold">{$t('providerTitle')}</h1>
     <p class="text-sm text-[rgb(var(--fg-muted))]">{$t('providerSubtitle')}</p>
   </header>
+
+  {#if sidecarWarning}
+    <!-- Sidecar is down — offline catalogue only. Keep the picker usable. -->
+    <div class="card p-4 border-amber-500/40 bg-amber-50/30 dark:bg-amber-900/10 text-sm space-y-1">
+      <div class="font-medium text-amber-700 dark:text-amber-400">
+        Sidecar unreachable — showing the bundled provider list only.
+      </div>
+      <div class="text-xs text-[rgb(var(--fg-muted))]">
+        Connectivity testing and custom endpoints need the Python sidecar
+        to respond. You can still pick a preset; test once the app relaunches.
+      </div>
+      <div class="font-mono text-[11px] text-[rgb(var(--fg-muted))]">
+        {sidecarWarning}
+      </div>
+    </div>
+  {/if}
 
   <!-- Preset picker -->
   {#if loadingPresets}
@@ -278,7 +318,18 @@
       </div>
       <label class="block">
         <span class="mb-1 block text-xs text-[rgb(var(--fg-muted))]">{$t('providerBaseUrl')}</span>
-        <input class="input" bind:value={customBaseUrl} placeholder="https://api.example.com/v1" />
+        <input
+          class="input"
+          bind:value={customBaseUrl}
+          placeholder={customFormat === 'anthropic_http'
+            ? 'https://api.example.com         (no trailing /v1 — we append /v1/messages)'
+            : 'https://api.example.com/v1      (we append /chat/completions)'}
+        />
+        <p class="mt-1 text-[11px] text-[rgb(var(--fg-muted))]">
+          {customFormat === 'anthropic_http'
+            ? 'Anthropic-compatible: set the host + base path, we append /v1/messages.'
+            : 'OpenAI-compatible: include the /v1 segment, we append /chat/completions.'}
+        </p>
       </label>
     </div>
   {/if}
