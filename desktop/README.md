@@ -58,6 +58,25 @@ npm run tauri:build
 
 Outputs `.dmg` (macOS), `.msi` + `.exe` (Windows), `.AppImage` + `.deb` (Linux).
 
+### Downloading a pre-built installer
+
+Every push that touches `desktop/**` or `src/hyacine/ipc/**` runs the
+[Desktop workflow](../.github/workflows/desktop.yml), which uploads an
+unsigned installer for each OS as a run artifact (retention: 14 days).
+Grab it from the workflow's "Artifacts" section:
+
+- macOS arm64 — `hyacine-aarch64-apple-darwin.zip` → `.dmg` inside
+- Windows x64 — `hyacine-x86_64-pc-windows-msvc.zip` → `.msi` / `.exe`
+- Linux x64  — `hyacine-x86_64-unknown-linux-gnu.zip` → `.AppImage` / `.deb`
+
+These bundles are **unsigned**, so the first launch requires manual
+approval:
+
+- **macOS**: Right-click the `.app` → Open → *Open* (or run
+  `xattr -dr com.apple.quarantine /Applications/Hyacine.app`)
+- **Windows**: SmartScreen → More info → *Run anyway*
+- **Linux**: `chmod +x` the `.AppImage` and run it
+
 ## Wizard flow
 
 | Step | Path                      | Purpose                                              |
