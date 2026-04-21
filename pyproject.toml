@@ -23,6 +23,7 @@ dependencies = [
 
 [project.scripts]
 hyacine = "hyacine.__main__:main"
+hyacine-ipc = "hyacine.ipc.__main__:main"
 
 [dependency-groups]
 dev = [

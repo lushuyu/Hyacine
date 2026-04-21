@@ -1,0 +1,18 @@
+node_modules/
+.svelte-kit/
+build/
+dist/
+.vite/
+
+# Rust
+src-tauri/target/
+src-tauri/gen/
+src-tauri/binaries/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# editor
+.vscode/
+.idea/
