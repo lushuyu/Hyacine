@@ -13,7 +13,8 @@
     run_time: string;
     language: 'en' | 'zh-CN';
   } | null>(null);
-  let hasClaude = $state(false);
+  let hasKey = $state(false);
+  let currentProvider = $state<{ id: string; name: string; secret_slug: string } | null>(null);
   let me = $state<{ signed_in: boolean; display_name?: string; user_principal_name?: string }>({
     signed_in: false
   });
@@ -32,7 +33,16 @@
       run_time: c.run_time,
       language: (c.language as 'en' | 'zh-CN') ?? 'en'
     };
-    hasClaude = await ipc.secrets.has('claude');
+    try {
+      const cur = await ipc.providers.current();
+      currentProvider = cur.current;
+      hasKey = currentProvider
+        ? await ipc.secrets.has(currentProvider.secret_slug)
+        : false;
+    } catch {
+      currentProvider = null;
+      hasKey = false;
+    }
     me = await ipc.graph.me();
   }
 
@@ -44,9 +54,11 @@
     pushToast('success', 'Settings saved');
   }
 
-  async function rotateClaude() {
-    await ipc.secrets.remove('claude');
-    await goto('/wizard/claude/');
+  async function rotateProviderKey() {
+    if (currentProvider) {
+      await ipc.secrets.remove(currentProvider.secret_slug);
+    }
+    await goto('/wizard/provider/');
   }
 
   async function rerunWizard() {
@@ -141,14 +153,20 @@
           <div class="flex items-center gap-3">
             <KeyRound size="18" class="text-brand-500" />
             <div>
-              <div class="text-sm font-medium">Claude API key</div>
+              <div class="text-sm font-medium">
+                LLM provider{currentProvider ? ` · ${currentProvider.name}` : ''}
+              </div>
               <div class="text-xs text-[rgb(var(--fg-muted))]">
-                {hasClaude ? 'Stored in OS keychain' : 'Not set'}
+                {hasKey
+                  ? `Key stored for ${currentProvider?.secret_slug ?? '—'}`
+                  : currentProvider
+                    ? 'No key stored for this provider'
+                    : 'No provider selected yet'}
               </div>
             </div>
           </div>
-          <button class="btn-secondary" onclick={rotateClaude}>
-            <RefreshCw size="14" /> Rotate
+          <button class="btn-secondary" onclick={rotateProviderKey}>
+            <RefreshCw size="14" /> {currentProvider ? 'Rotate / switch' : 'Configure'}
           </button>
         </div>
         <div class="h-px bg-[rgb(var(--border))]"></div>

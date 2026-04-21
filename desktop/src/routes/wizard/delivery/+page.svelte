@@ -26,7 +26,7 @@
       ...w,
       delivery: { email, timezone: tz, language: outLang }
     }));
-    await goto('/wizard/claude/');
+    await goto('/wizard/provider/');
   }
 </script>
 

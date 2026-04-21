@@ -70,7 +70,7 @@
 
   async function cancel() {
     await ipc.graph.cancelDeviceFlow();
-    await goto('/wizard/claude/');
+    await goto('/wizard/provider/');
   }
 
   async function next() {

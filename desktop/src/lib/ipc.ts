@@ -47,6 +47,22 @@ export interface WizardConfig {
   priorities: string[];
 }
 
+export type ApiFormat = 'anthropic_cli' | 'anthropic_http' | 'openai_chat';
+
+export interface ProviderPreset {
+  id: string;
+  name: string;
+  category: 'official' | 'relay' | 'cn_official' | 'aggregator' | 'local' | 'custom';
+  api_format: ApiFormat;
+  base_url: string;
+  default_model: string;
+  secret_slug: string;
+  docs_url: string;
+  icon_color: string;
+  notes: string;
+  models: string[];
+}
+
 export const ipc = {
   // ── sidecar lifecycle ──────────────────────────────────────────────────
   async startSidecar(): Promise<void> {
@@ -124,5 +140,28 @@ export const ipc = {
     run: () => ipc.rpc<{ ok: boolean; duration_ms: number; error?: string }>('pipeline.run'),
     history: (limit = 14) =>
       ipc.rpc<{ runs: Record<string, unknown>[] }>('pipeline.history', { limit })
+  },
+
+  providers: {
+    list: () => ipc.rpc<{ providers: ProviderPreset[] }>('providers.list'),
+    current: () =>
+      ipc.rpc<{
+        current: {
+          id: string;
+          name: string;
+          api_format: ApiFormat;
+          base_url: string;
+          default_model: string;
+          secret_slug: string;
+        } | null;
+        fallback_to_default?: boolean;
+      }>('providers.current'),
+    test: (params: {
+      provider_id?: string;
+      base_url?: string;
+      api_format?: ApiFormat;
+      api_key?: string;
+      model?: string;
+    }) => ipc.rpc<ProbeResult>('providers.test', params as Record<string, unknown>)
   }
 };
