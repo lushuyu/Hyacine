@@ -276,22 +276,59 @@ fn which_python() -> &'static str {
     }
 }
 
+/// Candidate keychain slugs we probe, in priority order, when building the
+/// sidecar env. The first non-empty hit wins. We keep the legacy `claude`
+/// slug for users upgrading from pre-provider-registry installs.
+const KEYCHAIN_SLUG_CANDIDATES: &[&str] = &[
+    // Multi-provider presets (new):
+    "claude-code-oauth",
+    "anthropic-console",
+    "deepseek-anthropic",
+    "kimi-anthropic",
+    "zhipu-glm-anthropic",
+    "openai",
+    "groq",
+    "ollama-local",
+    // Legacy: pre-provider-registry wizard stored under "claude".
+    "claude",
+];
+
 /// Build the env var map the sidecar process inherits on spawn.
 ///
-/// Matches `hyacine.llm.claude_code.build_env`: if the user stored a token
-/// under the `claude` keychain slug we forward it as `CLAUDE_CODE_OAUTH_TOKEN`,
-/// and we unset `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` so they can't
-/// silently override the OAuth token.
+/// Every backend inside ``hyacine.llm`` reads the user's secret from one of
+/// two env vars:
+///   * ``CLAUDE_CODE_OAUTH_TOKEN`` — specifically for the ``claude`` CLI
+///     subprocess. We continue setting this for the historical
+///     single-provider flow.
+///   * ``HYACINE_LLM_API_KEY`` — new generic slot read by the
+///     ``anthropic_http`` + ``openai_chat`` backends through the pipeline.
+///
+/// We populate both: the CLI value only when it came from a slug whose
+/// preset uses ``anthropic_cli``, and ``HYACINE_LLM_API_KEY`` for everything
+/// else. Anthropic's scrubbing contract is honoured: ``ANTHROPIC_API_KEY`` /
+/// ``ANTHROPIC_AUTH_TOKEN`` are removed so stale shell env can't silently
+/// override whatever we just set.
 fn build_sidecar_env() -> std::collections::HashMap<String, String> {
     let mut env: std::collections::HashMap<String, String> = std::env::vars().collect();
-    if let Ok(Some(token)) = crate::secrets::get("claude") {
+
+    for slug in KEYCHAIN_SLUG_CANDIDATES {
+        let Ok(Some(token)) = crate::secrets::get(slug) else { continue };
         let trimmed = token.trim().to_string();
-        if !trimmed.is_empty() {
-            env.insert("CLAUDE_CODE_OAUTH_TOKEN".into(), trimmed.clone());
-            // Keep the HYACINE_* fallback in sync so documented escape hatch works.
-            env.insert("HYACINE_CLAUDE_CODE_OAUTH_TOKEN".into(), trimmed);
+        if trimmed.is_empty() {
+            continue;
         }
+        // The CLI slug is special — its token authenticates a local `claude`
+        // binary through OAuth. Other slugs flow as plain API keys.
+        if *slug == "claude-code-oauth" || *slug == "claude" {
+            env.insert("CLAUDE_CODE_OAUTH_TOKEN".into(), trimmed.clone());
+            env.insert("HYACINE_CLAUDE_CODE_OAUTH_TOKEN".into(), trimmed.clone());
+        } else {
+            env.insert("HYACINE_LLM_API_KEY".into(), trimmed.clone());
+        }
+        tracing::info!(slug = slug, "loaded sidecar credential from keychain");
+        break;
     }
+
     env.remove("ANTHROPIC_API_KEY");
     env.remove("ANTHROPIC_AUTH_TOKEN");
     env
