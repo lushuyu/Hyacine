@@ -1,0 +1,50 @@
+{
+  "$schema": "https://schema.tauri.app/config/2.0.0",
+  "productName": "Hyacine",
+  "version": "0.1.0",
+  "identifier": "com.hyacine.desktop",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Hyacine",
+        "width": 960,
+        "height": 720,
+        "minWidth": 760,
+        "minHeight": 560,
+        "resizable": true,
+        "fullscreen": false,
+        "decorations": true,
+        "transparent": false,
+        "center": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' https://api.anthropic.com https://graph.microsoft.com https://login.microsoftonline.com ipc: http://ipc.localhost; img-src 'self' asset: data: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self' data:; frame-src 'self' data:"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "category": "Productivity",
+    "shortDescription": "Daily Outlook briefing, powered by Claude.",
+    "longDescription": "Hyacine aggregates your Outlook mail and calendar every morning, passes the structured data to Claude, and delivers a prioritised briefing back to your inbox.",
+    "resources": [],
+    "externalBin": ["binaries/hyacine-ipc"]
+  },
+  "plugins": {}
+}

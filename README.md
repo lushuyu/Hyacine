@@ -77,11 +77,21 @@ Outlook inbox + calendar
   /me/sendMail → your inbox
 ```
 
+## Desktop app
+
+A cross-platform desktop GUI (Tauri + SvelteKit) lives under `desktop/`. It
+wraps the Python pipeline via a JSON-RPC sidecar (`hyacine-ipc`), adds an
+animated first-run wizard, OS-keychain-backed secret storage, live
+connectivity checks, and a dashboard for past runs. See
+[`desktop/README.md`](desktop/README.md) and
+[`docs/desktop-architecture.md`](docs/desktop-architecture.md).
+
 ## Links
 
 - [First-run guide](docs/ONBOARDING.md)
 - [Server deploy](docs/server-deploy.md)
 - [Troubleshooting](docs/troubleshooting.md)
+- [Desktop architecture](docs/desktop-architecture.md)
 - [Example: Alice the PM](examples/alice/)
 - [Contributing](CONTRIBUTING.md)
 

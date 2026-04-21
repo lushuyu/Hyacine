@@ -1,0 +1,6 @@
+/target
+/gen/schemas
+/binaries
+/icons/*.png
+/icons/*.icns
+/icons/*.ico
