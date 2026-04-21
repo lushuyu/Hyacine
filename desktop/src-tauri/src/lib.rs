@@ -3,6 +3,7 @@
 //! Wires plugins, commands, and the Python sidecar state into the app builder.
 
 mod error;
+mod redact;
 mod sidecar;
 mod secrets;
 mod commands;

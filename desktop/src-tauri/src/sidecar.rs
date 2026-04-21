@@ -97,8 +97,13 @@ impl SidecarState {
                         }
                     }
                     CommandEvent::Stderr(bytes) => {
-                        let s = String::from_utf8_lossy(&bytes).to_string();
-                        tracing::info!(target = "sidecar", "{}", s.trim());
+                        // The sidecar emits structured JSON logs to stderr, but
+                        // a Python traceback could still carry an API key in a
+                        // repr()ed request. Redact before tracing — the same
+                        // guarantee the webview-side logger already enforces.
+                        let s = String::from_utf8_lossy(&bytes);
+                        let cleaned = crate::redact::scrub(s.trim());
+                        tracing::info!(target = "sidecar", "{}", cleaned);
                     }
                     CommandEvent::Error(e) => {
                         tracing::error!("sidecar error: {e}");
