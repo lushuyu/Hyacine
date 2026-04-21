@@ -149,8 +149,31 @@ def run(
     }
 
 
+# Raw RunStatus values (see hyacine.models.RunStatus) → UI-facing buckets
+# that the desktop frontend colour-codes. We expose both so the app can show
+# raw status in tooltips while using the normalised form for styling.
+_UI_STATUS = {
+    "success": "ok",
+    "failed": "fail",
+    "pending": "pending",
+    "running": "running",
+}
+
+
+def _normalise_status(raw: str | None) -> str:
+    if not raw:
+        return "pending"
+    return _UI_STATUS.get(raw.lower(), raw.lower())
+
+
 def history(limit: int = 14) -> dict[str, Any]:
-    """Return up to `limit` most recent runs from the SQLite watermark DB."""
+    """Return up to ``limit`` most recent runs from the SQLite watermark DB.
+
+    Each run carries both ``status`` (raw enum value from hyacine.models —
+    e.g. ``success``/``failed``) and ``status_ui`` (normalised to
+    ``ok``/``fail``/``pending``/``running``). Frontend dashboards and layout
+    indicators should read ``status_ui``; detail views can show ``status``.
+    """
     s = get_settings()
     try:
         init_db(s.db_path)
@@ -166,6 +189,7 @@ def history(limit: int = 14) -> dict[str, Any]:
                     {
                         "id": r.id,
                         "status": r.status,
+                        "status_ui": _normalise_status(r.status),
                         "started_at": r.started_at.isoformat() if r.started_at else None,
                         "finished_at": r.finished_at.isoformat() if r.finished_at else None,
                         "email_count": r.email_count,
@@ -200,7 +224,12 @@ def _markdown_to_html(md: str) -> str:
         )
         return _wrap_preview(cleaned)
     except Exception:  # noqa: BLE001
-        return _wrap_preview(f"<pre>{md}</pre>")
+        # Fallback when markdown/bleach are missing or throw: never embed
+        # unsanitised text. Escape so any HTML (incl. <script>/<img src=…>)
+        # is rendered as literal, not parsed, in the sandboxed iframe.
+        import html as _html  # noqa: PLC0415
+
+        return _wrap_preview(f"<pre>{_html.escape(md)}</pre>")
 
 
 def _wrap_preview(body: str) -> str:

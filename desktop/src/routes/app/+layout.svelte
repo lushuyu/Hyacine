@@ -22,8 +22,19 @@
   onMount(async () => {
     try {
       const h = await ipc.pipeline.history(1);
-      const last = h.runs?.[0] as { status?: string } | undefined;
-      status = !last ? 'unknown' : last.status === 'ok' ? 'ok' : 'err';
+      const last = h.runs?.[0] as { status_ui?: string } | undefined;
+      // `status_ui` is the sidecar's normalised bucket ('ok' | 'fail' |
+      // 'pending' | 'running'). The raw DB value lives in `status`; we
+      // don't use it for the badge.
+      if (!last) {
+        status = 'unknown';
+      } else if (last.status_ui === 'ok') {
+        status = 'ok';
+      } else if (last.status_ui === 'fail') {
+        status = 'err';
+      } else {
+        status = 'warn';
+      }
     } catch {
       status = 'unknown';
     }

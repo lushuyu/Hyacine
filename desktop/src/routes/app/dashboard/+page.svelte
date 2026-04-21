@@ -4,7 +4,10 @@
 
   interface RunSummary {
     date?: string;
+    /** Raw RunStatus value — e.g. success / failed / pending / running. */
     status?: string;
+    /** Normalised bucket produced by the sidecar — 'ok' | 'fail' | 'pending' | 'running'. */
+    status_ui?: string;
     [k: string]: unknown;
   }
 
@@ -23,8 +26,9 @@
 
   function cellColor(r?: RunSummary) {
     if (!r) return 'bg-[rgb(var(--border)/0.3)]';
-    if (r.status === 'ok') return 'bg-brand-400';
-    if (r.status === 'fail') return 'bg-red-400';
+    const ui = r.status_ui ?? r.status ?? '';
+    if (ui === 'ok') return 'bg-brand-400';
+    if (ui === 'fail') return 'bg-red-400';
     return 'bg-amber-300';
   }
 
