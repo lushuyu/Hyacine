@@ -63,16 +63,27 @@ impl SidecarState {
             return Ok(());
         }
 
+        // Build the child environment. The backend pipeline (hyacine.llm
+        // .claude_code.build_env) requires CLAUDE_CODE_OAUTH_TOKEN and
+        // explicitly deletes ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN; mirror
+        // that contract here so "Run now" works the moment the wizard
+        // finishes, without the user having to export anything.
+        let env = build_sidecar_env();
+
         // Prefer the bundled sidecar binary; fall back to `python -m hyacine.ipc`
         // during development so you don't need to build the sidecar to iterate.
         let sidecar = app.shell().sidecar("hyacine-ipc");
         let (mut rx, child) = match sidecar {
-            Ok(cmd) => cmd.spawn().map_err(|e| AppError::Sidecar(e.to_string()))?,
+            Ok(cmd) => cmd
+                .envs(env.clone())
+                .spawn()
+                .map_err(|e| AppError::Sidecar(e.to_string()))?,
             Err(_) => {
                 let python = which_python();
                 app.shell()
                     .command(python)
                     .args(["-m", "hyacine.ipc"])
+                    .envs(env)
                     .spawn()
                     .map_err(|e| AppError::Sidecar(format!("fallback python: {e}")))?
             }
@@ -115,6 +126,18 @@ impl SidecarState {
                         if !tail.is_empty() {
                             handle_frame(&app_for_reader, &pending_for_reader, tail).await;
                         }
+                        // Fail every in-flight RPC fast instead of making them
+                        // wait out the 60s timeout. We send Frame::Err so the
+                        // webview gets a clean AppError rather than a
+                        // 'pending dropped' placeholder.
+                        let mut map = pending_for_reader.lock().await;
+                        for (_id, tx) in map.drain() {
+                            let _ = tx.send(Frame::Err {
+                                code: -32002,
+                                message: "sidecar terminated".into(),
+                                data: None,
+                            });
+                        }
                         break;
                     }
                     _ => {}
@@ -130,6 +153,16 @@ impl SidecarState {
         let mut guard = self.inner.lock().await;
         if let Some(inner) = guard.take() {
             let _ = inner.child.kill();
+        }
+        // Same drain as the terminated path — stop() is a deliberate kill, so
+        // pending callers shouldn't block on the 60s timeout either.
+        let mut map = self.pending.lock().await;
+        for (_id, tx) in map.drain() {
+            let _ = tx.send(Frame::Err {
+                code: -32002,
+                message: "sidecar stopped".into(),
+                data: None,
+            });
         }
         Ok(())
     }
@@ -241,6 +274,27 @@ fn which_python() -> &'static str {
     } else {
         "python3"
     }
+}
+
+/// Build the env var map the sidecar process inherits on spawn.
+///
+/// Matches `hyacine.llm.claude_code.build_env`: if the user stored a token
+/// under the `claude` keychain slug we forward it as `CLAUDE_CODE_OAUTH_TOKEN`,
+/// and we unset `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` so they can't
+/// silently override the OAuth token.
+fn build_sidecar_env() -> std::collections::HashMap<String, String> {
+    let mut env: std::collections::HashMap<String, String> = std::env::vars().collect();
+    if let Ok(Some(token)) = crate::secrets::get("claude") {
+        let trimmed = token.trim().to_string();
+        if !trimmed.is_empty() {
+            env.insert("CLAUDE_CODE_OAUTH_TOKEN".into(), trimmed.clone());
+            // Keep the HYACINE_* fallback in sync so documented escape hatch works.
+            env.insert("HYACINE_CLAUDE_CODE_OAUTH_TOKEN".into(), trimmed);
+        }
+    }
+    env.remove("ANTHROPIC_API_KEY");
+    env.remove("ANTHROPIC_AUTH_TOKEN");
+    env
 }
 
 #[allow(dead_code)]
