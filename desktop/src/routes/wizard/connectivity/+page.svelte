@@ -43,24 +43,34 @@
     results = { dns: null, claude: null, graph: null, sendmail: null };
     for (const k of kinds) running[k] = k !== 'sendmail' || sendmailEnabled;
 
-    // DNS — no auth needed.
-    results.dns = await ipc.connectivity.probe('dns');
-    running.dns = false;
-
-    // Claude — use stored key via Rust.
-    results.claude = await ipc.cmd<ProbeResult>('rust_probe_claude');
-    running.claude = false;
-
-    // Graph — same, uses cached record.
-    results.graph = await ipc.cmd<ProbeResult>('rust_probe_graph');
-    running.graph = false;
-
+    // Run the independent probes concurrently so total wizard time tracks
+    // the slowest single request, not the sum. Each promise clears its own
+    // `running` flag on resolution so the UI can stream checkmarks in.
+    const tasks: Promise<void>[] = [
+      ipc.connectivity.probe('dns').then((r) => {
+        results.dns = r;
+        running.dns = false;
+      }),
+      ipc.cmd<ProbeResult>('rust_probe_claude').then((r) => {
+        results.claude = r;
+        running.claude = false;
+      }),
+      ipc.cmd<ProbeResult>('rust_probe_graph').then((r) => {
+        results.graph = r;
+        running.graph = false;
+      })
+    ];
     if (sendmailEnabled) {
-      results.sendmail = await ipc.cmd<ProbeResult>('rust_probe_sendmail', {
-        recipient: $wizard.delivery.email
-      });
-      running.sendmail = false;
+      tasks.push(
+        ipc
+          .cmd<ProbeResult>('rust_probe_sendmail', { recipient: $wizard.delivery.email })
+          .then((r) => {
+            results.sendmail = r;
+            running.sendmail = false;
+          })
+      );
     }
+    await Promise.allSettled(tasks);
   }
 
   const allDone = $derived(

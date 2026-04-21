@@ -25,7 +25,9 @@
     wizard.update((w) => ({ ...w, schedule: { run_time: runTime, startup, tray } }));
     await ipc.config.write({ run_time: runTime });
     try {
-      await ipc.rpc('ui_set_startup', { enabled: startup });
+      // ui_set_startup is a Rust Tauri command, not a JSON-RPC method on the
+      // Python sidecar — route via ipc.cmd so it doesn't hit METHOD_NOT_FOUND.
+      await ipc.cmd('ui_set_startup', { enabled: startup });
     } catch {
       /* non-fatal */
     }

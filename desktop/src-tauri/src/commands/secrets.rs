@@ -40,7 +40,7 @@ pub struct ProbeResult {
     pub detail: String,
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "camelCase")]
 pub async fn secrets_test_claude(api_key: String, model: Option<String>) -> AppResult<ProbeResult> {
     let key = api_key.trim();
     if key.is_empty() {

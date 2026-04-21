@@ -52,12 +52,29 @@
     try {
       result = await ipc.pipeline.dryRun();
       done = !!result?.ok;
-      for (const s of stages) status[s] = 'ok';
+
+      // Only overwrite stages the `rpc:pipeline.progress` stream hasn't
+      // already marked — the event-driven updates are authoritative. For
+      // any stage still in 'pending'/'running' when the RPC returns, take
+      // its terminal colour from `result.ok` so we never claim success on
+      // a failed run.
+      const terminal: 'ok' | 'fail' = result?.ok ? 'ok' : 'fail';
+      for (const s of stages) {
+        if (status[s] === 'pending' || status[s] === 'running') {
+          status[s] = terminal;
+        }
+      }
+      if (!result?.ok && result?.error) {
+        pushToast('error', `Dry run failed: ${result.error}`);
+      }
       wizard.update((w) => ({
         ...w,
         preview: result ? { html: result.html, subject: result.subject, summary: result.summary } : null
       }));
     } catch (e) {
+      for (const s of stages) {
+        if (status[s] === 'pending' || status[s] === 'running') status[s] = 'fail';
+      }
       pushToast('error', String(e));
     } finally {
       running = false;
