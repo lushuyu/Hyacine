@@ -72,12 +72,19 @@ impl SidecarState {
 
         // Prefer the bundled sidecar binary; fall back to `python -m hyacine.ipc`
         // during development so you don't need to build the sidecar to iterate.
+        //
+        // The error messages here need to be specific — CI-built installers
+        // ship without a bundled Python runtime (see the externalBin note in
+        // tauri.conf.json), so a user on a clean machine will hit the
+        // fallback path with no Python on PATH. Tell them exactly what we
+        // tried and how to fix it.
         let sidecar = app.shell().sidecar("hyacine-ipc");
         let (mut rx, child) = match sidecar {
-            Ok(cmd) => cmd
-                .envs(env.clone())
-                .spawn()
-                .map_err(|e| AppError::Sidecar(e.to_string()))?,
+            Ok(cmd) => cmd.envs(env.clone()).spawn().map_err(|e| {
+                AppError::Sidecar(format!(
+                    "bundled sidecar `hyacine-ipc` failed to spawn: {e}"
+                ))
+            })?,
             Err(_) => {
                 let python = which_python();
                 app.shell()
@@ -85,7 +92,15 @@ impl SidecarState {
                     .args(["-m", "hyacine.ipc"])
                     .envs(env)
                     .spawn()
-                    .map_err(|e| AppError::Sidecar(format!("fallback python: {e}")))?
+                    .map_err(|e| {
+                        AppError::Sidecar(format!(
+                            "Python sidecar unavailable. Tried `{python} -m hyacine.ipc`: {e}. \
+                             The bundled installer ships without a Python runtime yet — \
+                             install Python 3.11+ and run `pip install hyacine` (or clone \
+                             the repo and `uv sync`) to use connectivity testing and \
+                             pipeline runs. The wizard picker still works offline."
+                        ))
+                    })?
             }
         };
 

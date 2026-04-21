@@ -2,10 +2,10 @@
   import '../app.css';
   import { onMount } from 'svelte';
   import { ipc } from '$lib/ipc';
-  import { toast, setTheme } from '$lib/stores';
+  import { sidecarError, toast, setTheme } from '$lib/stores';
+  import { formatError } from '$lib/provider-presets';
   import { fly } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
-  import { lang, t } from '$lib/i18n';
 
   let { children } = $props();
 
@@ -18,6 +18,10 @@
     try {
       await ipc.startSidecar();
     } catch (e) {
+      // Store the full error so downstream routes can show it instead of
+      // letting every feature fall through with "not started" from the
+      // pending map. Also keep the console.warn for devs tailing logs.
+      sidecarError.set(formatError(e));
       console.warn('sidecar failed to start', e);
     }
   });

@@ -107,18 +107,35 @@ def test(  # noqa: C901 — mirrors providers.api_format branches; keeping a sin
     if not effective_format:
         return _fail("providers.test", "missing api_format")
 
+    # Secrets never round-trip to the webview — when the key was stored via
+    # the wizard, the UI only has `has()`, not the plaintext. The Rust
+    # parent populates `HYACINE_LLM_API_KEY` at sidecar spawn for the
+    # active provider's slug, so fall back to it here.
+    effective_key = api_key or os.environ.get("HYACINE_LLM_API_KEY", "")
+
+    # Local providers (Ollama, LM Studio, etc.) run unauthenticated; treat
+    # an empty key as "no auth header needed" rather than a validation
+    # failure. Matches what :mod:`hyacine.llm.openai_chat` does in the
+    # real pipeline.
+    is_local = bool(preset and preset.category == "local") or (
+        effective_base.startswith("http://localhost")
+        or effective_base.startswith("http://127.0.0.1")
+    )
+
     if effective_format == "anthropic_cli":
-        return _probe_anthropic_cli(api_key=api_key, model=effective_model)
+        return _probe_anthropic_cli(api_key=effective_key, model=effective_model)
     if effective_format == "anthropic_http":
         if not effective_base:
             return _fail("providers.test", "missing base_url for anthropic_http")
-        if not api_key:
+        if not effective_key:
             return _fail("providers.test", "anthropic_http requires an api_key")
-        return _probe_anthropic_http(effective_base, api_key, effective_model)
+        return _probe_anthropic_http(effective_base, effective_key, effective_model)
     if effective_format == "openai_chat":
         if not effective_base:
             return _fail("providers.test", "missing base_url for openai_chat")
-        return _probe_openai_chat(effective_base, api_key, effective_model)
+        if not effective_key and not is_local:
+            return _fail("providers.test", "openai_chat requires an api_key (non-local provider)")
+        return _probe_openai_chat(effective_base, effective_key, effective_model)
     return _fail("providers.test", f"unknown api_format: {effective_format!r}")
 
 
