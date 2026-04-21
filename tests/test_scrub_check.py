@@ -56,7 +56,7 @@ def test_clean_tree_exits_0(tmp_path: Path) -> None:
     """A repo with no personal strings should exit 0."""
     _git_init(tmp_path)
     _git_add_commit(tmp_path, {
-        "README.md": "# Generic briefing template\n\nNo personal info here.\n",
+        "README.md": "# Generic template\n\nNo personal info here.\n",
         "src/example.py": 'print("hello world")\n',
     })
     result = _run_scrub(tmp_path)
@@ -101,7 +101,7 @@ def test_allowlisted_omc_specs_ignored(tmp_path: Path) -> None:
     """Files under .omc/specs/ are allowlisted and should not trigger violations."""
     _git_init(tmp_path)
     _git_add_commit(tmp_path, {
-        ".omc/specs/deep-interview-briefing-generalize.md": (
+        ".omc/specs/deep-interview-generalize.md": (
             "Original author: lushuyu. NUS grad student.\n"
         ),
         "README.md": "# Generic template\n",
