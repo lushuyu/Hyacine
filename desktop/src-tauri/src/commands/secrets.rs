@@ -1,26 +1,35 @@
+//! Keychain-backed secret storage Tauri commands.
+//!
+//! Each stored value is addressed by a short slug (`claude`, `graph`, etc).
+//! The fixed `keyring` service name is `hyacine`; the `slug` below is what
+//! the frontend passes. We keep the API boundary to a strict minimum — get
+//! is intentionally not exposed, since the webview should never need the
+//! plaintext value. Connectivity tests go through `secrets_test_claude`,
+//! which reads the value internally and returns only pass/fail + latency.
+
 use serde::Serialize;
 
 use crate::error::{AppError, AppResult};
 use crate::secrets;
 
 #[tauri::command]
-pub async fn secrets_set(service: String, value: String) -> AppResult<()> {
-    // Trim and reject obvious accidental copies of whole lines.
+pub async fn secrets_set(slug: String, value: String) -> AppResult<()> {
+    // Trim so accidental whitespace doesn't silently break auth later.
     let v = value.trim();
     if v.is_empty() {
         return Err(AppError::Other("empty secret".into()));
     }
-    secrets::set(&service, v)
+    secrets::set(&slug, v)
 }
 
 #[tauri::command]
-pub async fn secrets_has(service: String) -> AppResult<bool> {
-    secrets::has(&service)
+pub async fn secrets_has(slug: String) -> AppResult<bool> {
+    secrets::has(&slug)
 }
 
 #[tauri::command]
-pub async fn secrets_remove(service: String) -> AppResult<()> {
-    secrets::remove(&service)
+pub async fn secrets_remove(slug: String) -> AppResult<()> {
+    secrets::remove(&slug)
 }
 
 #[derive(Serialize)]
@@ -42,25 +51,34 @@ pub async fn secrets_test_claude(api_key: String, model: Option<String>) -> AppR
             detail: "empty key".into(),
         });
     }
-    let model = model.unwrap_or_else(|| "claude-haiku-4-5".into());
+    // "sonnet" matches Hyacine's existing CLI/config default. We avoid
+    // hard-coding a full model identifier here since the messages API
+    // resolves both short ("sonnet") and fully-qualified names.
+    let model = model.unwrap_or_else(|| "sonnet".into());
     let start = std::time::Instant::now();
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .map_err(crate::error::AppError::from)?;
+        .build()?;
     let body = serde_json::json!({
         "model": model,
         "max_tokens": 1,
         "messages": [{"role": "user", "content": "ping"}],
     });
-    let res = client
+
+    // Accept both Anthropic Console API keys (x-api-key) and Claude Code
+    // OAuth tokens (Authorization: Bearer) — the latter is what the existing
+    // hyacine pipeline actually uses.
+    let mut req = client
         .post("https://api.anthropic.com/v1/messages")
-        .header("x-api-key", key)
         .header("anthropic-version", "2023-06-01")
-        .header("content-type", "application/json")
-        .json(&body)
-        .send()
-        .await;
+        .header("content-type", "application/json");
+    req = if key.starts_with("sk-ant-") {
+        req.header("x-api-key", key)
+    } else {
+        req.header("authorization", format!("Bearer {key}"))
+    };
+
+    let res = req.json(&body).send().await;
     let latency = start.elapsed().as_millis() as u64;
     Ok(match res {
         Ok(r) if r.status().is_success() => ProbeResult {

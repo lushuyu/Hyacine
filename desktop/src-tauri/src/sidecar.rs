@@ -6,6 +6,11 @@
 //! Every pending request is tracked by id in a shared map; the reader task
 //! completes the oneshot when it sees the matching response. Notifications
 //! (no `id`) are emitted to the frontend as `rpc:<method>` events.
+//!
+//! The reader buffers partial stdout chunks across `CommandEvent::Stdout`
+//! arrivals, because the OS can split a line arbitrarily — a large JSON
+//! response (e.g. rendered HTML) is routinely split into multiple pieces and
+//! we must not treat them as independent frames.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -20,7 +25,18 @@ use tokio::time::{timeout, Duration};
 
 use crate::error::{AppError, AppResult};
 
-type Pending = Arc<Mutex<HashMap<u64, oneshot::Sender<Value>>>>;
+type Pending = Arc<Mutex<HashMap<u64, oneshot::Sender<Frame>>>>;
+
+/// Result of routing a matched response frame to a waiting caller.
+///
+/// Keeping the success/error split in an enum here (instead of collapsing to
+/// `Value`) means `SidecarState::rpc` can translate an RPC-level error into
+/// an `AppError` and make `invoke()` reject — otherwise the webview would
+/// receive an error body that looks like a successful result.
+pub enum Frame {
+    Ok(Value),
+    Err { code: i64, message: String, data: Option<Value> },
+}
 
 pub struct SidecarState {
     inner: Arc<Mutex<Option<SidecarInner>>>,
@@ -65,20 +81,23 @@ impl SidecarState {
         let app_for_reader = app.clone();
         let pending_for_reader = self.pending.clone();
         tauri::async_runtime::spawn(async move {
+            // Buffer straddling partial lines across CommandEvent::Stdout chunks.
+            let mut carry = String::new();
             while let Some(ev) = rx.recv().await {
                 match ev {
-                    CommandEvent::Stdout(line) => {
-                        let s = String::from_utf8_lossy(&line).to_string();
-                        for chunk in s.split('\n') {
-                            let chunk = chunk.trim();
-                            if chunk.is_empty() {
-                                continue;
+                    CommandEvent::Stdout(bytes) => {
+                        let s = String::from_utf8_lossy(&bytes);
+                        carry.push_str(&s);
+                        while let Some(idx) = carry.find('\n') {
+                            let line = carry[..idx].trim().to_string();
+                            carry.drain(..=idx);
+                            if !line.is_empty() {
+                                handle_frame(&app_for_reader, &pending_for_reader, &line).await;
                             }
-                            handle_frame(&app_for_reader, &pending_for_reader, chunk).await;
                         }
                     }
-                    CommandEvent::Stderr(line) => {
-                        let s = String::from_utf8_lossy(&line).to_string();
+                    CommandEvent::Stderr(bytes) => {
+                        let s = String::from_utf8_lossy(&bytes).to_string();
                         tracing::info!(target = "sidecar", "{}", s.trim());
                     }
                     CommandEvent::Error(e) => {
@@ -86,6 +105,11 @@ impl SidecarState {
                     }
                     CommandEvent::Terminated(payload) => {
                         tracing::warn!("sidecar terminated: {:?}", payload);
+                        // Drain leftover buffer — last frame may not be newline-terminated.
+                        let tail = carry.trim();
+                        if !tail.is_empty() {
+                            handle_frame(&app_for_reader, &pending_for_reader, tail).await;
+                        }
                         break;
                     }
                     _ => {}
@@ -124,21 +148,44 @@ impl SidecarState {
 
         {
             let guard = self.inner.lock().await;
-            let inner = guard
-                .as_ref()
-                .ok_or_else(|| AppError::Sidecar("not started".into()))?;
-            inner
-                .child
-                .write(line.as_bytes())
-                .map_err(|e| AppError::Sidecar(format!("write: {e}")))?;
+            let inner = match guard.as_ref() {
+                Some(v) => v,
+                None => {
+                    // No child — leak would never happen since we haven't sent
+                    // anything, but be defensive and clean the pending entry.
+                    self.pending.lock().await.remove(&id);
+                    return Err(AppError::Sidecar("not started".into()));
+                }
+            };
+            if let Err(e) = inner.child.write(line.as_bytes()) {
+                self.pending.lock().await.remove(&id);
+                return Err(AppError::Sidecar(format!("write: {e}")));
+            }
         }
 
-        let result = timeout(Duration::from_secs(60), rx)
-            .await
-            .map_err(|_| AppError::Sidecar(format!("rpc timeout: {method}")))?
-            .map_err(|_| AppError::Sidecar("pending dropped".into()))?;
+        let outcome = match timeout(Duration::from_secs(60), rx).await {
+            Ok(Ok(frame)) => frame,
+            Ok(Err(_)) => {
+                // Sender dropped without sending — likely the reader task died.
+                self.pending.lock().await.remove(&id);
+                return Err(AppError::Sidecar("pending dropped".into()));
+            }
+            Err(_) => {
+                // Timeout: cleanup pending so the map doesn't grow unbounded.
+                self.pending.lock().await.remove(&id);
+                return Err(AppError::Sidecar(format!("rpc timeout: {method}")));
+            }
+        };
 
-        serde_json::from_value(result).map_err(Into::into)
+        match outcome {
+            Frame::Ok(v) => serde_json::from_value(v).map_err(Into::into),
+            Frame::Err { code, message, data } => {
+                let detail = data
+                    .map(|d| format!("{message} ({d})"))
+                    .unwrap_or(message);
+                Err(AppError::Sidecar(format!("rpc {code}: {detail}")))
+            }
+        }
     }
 }
 
@@ -152,13 +199,22 @@ async fn handle_frame(app: &AppHandle, pending: &Pending, line: &str) {
     if let Some(id) = v.get("id").and_then(|x| x.as_u64()) {
         let mut map = pending.lock().await;
         if let Some(tx) = map.remove(&id) {
-            if let Some(result) = v.get("result") {
-                let _ = tx.send(result.clone());
+            let frame = if let Some(result) = v.get("result") {
+                Frame::Ok(result.clone())
             } else if let Some(err) = v.get("error") {
-                let _ = tx.send(json!({ "__error": err }));
+                Frame::Err {
+                    code: err.get("code").and_then(|c| c.as_i64()).unwrap_or(-32603),
+                    message: err
+                        .get("message")
+                        .and_then(|m| m.as_str())
+                        .unwrap_or("rpc error")
+                        .to_string(),
+                    data: err.get("data").cloned(),
+                }
             } else {
-                let _ = tx.send(Value::Null);
-            }
+                Frame::Ok(Value::Null)
+            };
+            let _ = tx.send(frame);
         }
         return;
     }
@@ -179,6 +235,7 @@ fn which_python() -> &'static str {
     }
 }
 
+#[allow(dead_code)]
 pub fn state<'a>(app: &'a AppHandle) -> tauri::State<'a, SidecarState> {
     app.state::<SidecarState>()
 }

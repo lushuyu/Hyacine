@@ -58,25 +58,26 @@ export const ipc = {
   async rpc<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
     return invoke<T>('sidecar_rpc', { method, params });
   },
+  /** Direct Tauri command invoke — used for Rust-only commands (e.g. probes). */
+  async cmd<T>(name: string, args: Record<string, unknown> = {}): Promise<T> {
+    return invoke<T>(name, args);
+  },
   async onEvent<T>(name: string, cb: (p: T) => void): Promise<UnlistenFn> {
     return listen<T>(name, (e) => cb(e.payload));
   },
 
   // ── secrets (keychain) ─────────────────────────────────────────────────
   secrets: {
-    async set(service: string, value: string): Promise<void> {
-      return invoke('secrets_set', { service, value });
+    async set(slug: string, value: string): Promise<void> {
+      return invoke('secrets_set', { slug, value });
     },
-    async has(service: string): Promise<boolean> {
-      return invoke<boolean>('secrets_has', { service });
+    async has(slug: string): Promise<boolean> {
+      return invoke<boolean>('secrets_has', { slug });
     },
-    async remove(service: string): Promise<void> {
-      return invoke('secrets_remove', { service });
+    async remove(slug: string): Promise<void> {
+      return invoke('secrets_remove', { slug });
     },
-    async testClaude(
-      apiKey: string,
-      model = 'claude-haiku-4-5'
-    ): Promise<ProbeResult> {
+    async testClaude(apiKey: string, model?: string): Promise<ProbeResult> {
       return invoke<ProbeResult>('secrets_test_claude', { apiKey, model });
     }
   },
