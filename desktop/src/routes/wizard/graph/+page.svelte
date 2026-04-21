@@ -4,12 +4,12 @@
   import { ipc, type DeviceFlowEvent } from '$lib/ipc';
   import { wizard, pushToast } from '$lib/stores';
   import { t } from '$lib/i18n';
-  import { open } from '@tauri-apps/plugin-opener';
+  import { openUrl } from '@tauri-apps/plugin-opener';
   import { Check, Copy, Loader2, ExternalLink, X } from 'lucide-svelte';
   import type { UnlistenFn } from '@tauri-apps/api/event';
 
-  type State = 'idle' | 'awaiting_user' | 'approved' | 'failed' | 'cancelled';
-  let state = $state<State>('idle');
+  type FlowState = 'idle' | 'awaiting_user' | 'approved' | 'failed' | 'cancelled';
+  let flow = $state<FlowState>('idle');
   let code = $state('');
   let uri = $state('');
   let user = $state('');
@@ -21,7 +21,7 @@
     // Maybe we already have a token.
     const me = await ipc.graph.me();
     if (me.signed_in) {
-      state = 'approved';
+      flow = 'approved';
       user = me.display_name ?? me.mail ?? me.user_principal_name ?? '';
       wizard.update((w) => ({
         ...w,
@@ -31,7 +31,7 @@
     }
 
     unsub = await ipc.onEvent<DeviceFlowEvent>('rpc:graph.device_flow', (e) => {
-      state = e.state;
+      flow = e.state;
       if (e.user_code) code = e.user_code;
       if (e.verification_uri) uri = e.verification_uri;
       if (e.username) user = e.username;
@@ -47,14 +47,14 @@
     try {
       await ipc.graph.startDeviceFlow();
     } catch (err) {
-      state = 'failed';
+      flow = 'failed';
       detail = String(err);
     }
   });
 
   onDestroy(() => {
     unsub?.();
-    if (state === 'awaiting_user') ipc.graph.cancelDeviceFlow().catch(() => {});
+    if (flow === 'awaiting_user') ipc.graph.cancelDeviceFlow().catch(() => {});
   });
 
   async function copy() {
@@ -65,7 +65,7 @@
 
   async function openBrowser() {
     if (!uri) return;
-    await open(uri);
+    await openUrl(uri);
   }
 
   async function cancel() {
@@ -86,7 +86,7 @@
     </p>
   </header>
 
-  {#if state === 'idle' || state === 'awaiting_user'}
+  {#if flow === 'idle' || flow === 'awaiting_user'}
     <div class="card p-6 space-y-5">
       <div class="flex flex-col items-center gap-3">
         <div class="relative">
@@ -130,7 +130,7 @@
         </button>
       </div>
     </div>
-  {:else if state === 'approved'}
+  {:else if flow === 'approved'}
     <div class="card p-6 space-y-4">
       <div class="flex items-center gap-3">
         <div class="flex h-10 w-10 items-center justify-center rounded-full bg-green-500/20 text-green-500">
@@ -142,10 +142,10 @@
         </div>
       </div>
     </div>
-  {:else if state === 'failed' || state === 'cancelled'}
+  {:else if flow === 'failed' || flow === 'cancelled'}
     <div class="card p-6 space-y-3 border-red-500/40">
       <div class="text-sm font-medium text-red-500">
-        {state === 'cancelled' ? 'Cancelled' : 'Sign-in failed'}
+        {flow === 'cancelled' ? 'Cancelled' : 'Sign-in failed'}
       </div>
       {#if detail}
         <div class="text-xs font-mono text-[rgb(var(--fg-muted))]">{detail}</div>
@@ -153,7 +153,7 @@
       <button
         class="btn-secondary"
         onclick={async () => {
-          state = 'idle';
+          flow = 'idle';
           await ipc.graph.startDeviceFlow();
         }}>Try again</button
       >
@@ -161,7 +161,7 @@
   {/if}
 
   <div class="flex justify-end">
-    <button class="btn-primary" disabled={state !== 'approved'} onclick={next}>
+    <button class="btn-primary" disabled={flow !== 'approved'} onclick={next}>
       {$t('continue')}
     </button>
   </div>

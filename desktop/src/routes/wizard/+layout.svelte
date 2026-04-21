@@ -3,7 +3,6 @@
   import { goto } from '$app/navigation';
   import { fly } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
-  import { progress, wizard } from '$lib/stores';
   import { ArrowLeft } from 'lucide-svelte';
 
   let { children } = $props();
@@ -23,6 +22,16 @@
 
   const currentIndex = $derived(order.indexOf($page.url.pathname));
   const canBack = $derived(currentIndex > 1); // can't go back to splash
+
+  // Drive the progress bar straight from the current route so it stays
+  // accurate even if a wizard step forgets to update a store. The earlier
+  // version derived from `wizard.step`, which was never incremented.
+  const progressPct = $derived(
+    currentIndex <= 0
+      ? 4
+      : Math.min(100, ((currentIndex + 1) / order.length) * 100)
+  );
+
   async function back() {
     if (canBack) await goto(order[currentIndex - 1]);
   }
@@ -33,7 +42,7 @@
   <div class="h-1 w-full bg-[rgb(var(--border))]/40">
     <div
       class="h-full bg-[rgb(var(--accent))] transition-[width] duration-500 ease-out"
-      style:width="{Math.min(100, Math.max(4, $progress * 100))}%"
+      style:width="{progressPct}%"
     ></div>
   </div>
 

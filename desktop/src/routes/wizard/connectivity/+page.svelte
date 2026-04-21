@@ -48,15 +48,15 @@
     running.dns = false;
 
     // Claude — use stored key via Rust.
-    results.claude = await ipc.rpc<ProbeResult>('rust_probe_claude', {});
+    results.claude = await ipc.cmd<ProbeResult>('rust_probe_claude');
     running.claude = false;
 
     // Graph — same, uses cached record.
-    results.graph = await ipc.rpc<ProbeResult>('rust_probe_graph', {});
+    results.graph = await ipc.cmd<ProbeResult>('rust_probe_graph');
     running.graph = false;
 
     if (sendmailEnabled) {
-      results.sendmail = await ipc.rpc<ProbeResult>('rust_probe_sendmail', {
+      results.sendmail = await ipc.cmd<ProbeResult>('rust_probe_sendmail', {
         recipient: $wizard.delivery.email
       });
       running.sendmail = false;
@@ -76,9 +76,10 @@
   );
 
   async function next() {
+    const cast = Object.values(results).filter(Boolean) as ProbeResult[];
     wizard.update((w) => ({
       ...w,
-      connectivity: { ok: allOk, results: Object.values(results).filter(Boolean) as unknown[] }
+      connectivity: { ok: allOk, results: cast as unknown as Record<string, unknown>[] }
     }));
     await goto('/wizard/preview/');
   }
@@ -135,11 +136,12 @@
               onclick={() => (expanded[k] = !expanded[k])}
               aria-label="toggle"
             >
-              <ChevronDown
-                size="16"
-                class="transition-transform duration-200"
+              <span
+                class="inline-block transition-transform duration-200"
                 style:transform={expanded[k] ? 'rotate(180deg)' : ''}
-              />
+              >
+                <ChevronDown size="16" />
+              </span>
             </button>
           {/if}
         </div>

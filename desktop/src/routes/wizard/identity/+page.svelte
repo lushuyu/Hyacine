@@ -29,7 +29,7 @@
         <span class="mb-1.5 block text-xs font-semibold text-[rgb(var(--fg-muted))]"
           >{$t('identityName')}</span
         >
-        <input class="input" bind:value={name} placeholder="Alice Chen" autofocus />
+        <input class="input" bind:value={name} placeholder="Alice Chen" />
       </label>
 
       <label class="block">

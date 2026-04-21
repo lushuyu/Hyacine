@@ -1,4 +1,4 @@
-import { writable, derived } from 'svelte/store';
+import { writable } from 'svelte/store';
 
 export type Theme = 'light' | 'dark' | 'auto';
 export type Lang = 'en' | 'zh-CN';
@@ -32,8 +32,6 @@ const initial: WizardState = {
 };
 
 export const wizard = writable<WizardState>(initial);
-
-export const progress = derived(wizard, ($w) => $w.step / 9);
 
 export function setTheme(t: Theme) {
   try {

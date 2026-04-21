@@ -8,7 +8,8 @@
 
   let { children } = $props();
 
-  let status: 'ok' | 'warn' | 'err' | 'unknown' = $state('unknown');
+  type Status = 'ok' | 'warn' | 'err' | 'unknown';
+  let status = $state<Status>('unknown');
   let running = $state(false);
 
   const tabs = [
@@ -75,13 +76,15 @@
         {@const Icon = tab.icon}
         {@const active = $page.url.pathname.startsWith(tab.path)}
         <button
-          class="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-all
-                 hover:bg-[rgb(var(--border)/0.35)]"
-          class:bg-[rgb(var(--border)/0.5)]={active}
-          class:font-medium={active}
+          class="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-all hover:bg-[rgb(var(--border)/0.35)] {active
+            ? 'bg-[rgb(var(--border)/0.5)] font-medium'
+            : ''}"
           onclick={() => goto(tab.path)}
         >
-          <Icon size="16" class={active ? 'text-brand-500' : 'text-[rgb(var(--fg-muted))]'} />
+          <Icon
+            size="16"
+            color={active ? 'rgb(139 92 246)' : 'rgb(var(--fg-muted))'}
+          />
           {tab.label}
         </button>
       {/each}

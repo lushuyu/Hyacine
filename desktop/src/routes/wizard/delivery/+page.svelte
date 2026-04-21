@@ -48,7 +48,6 @@
         type="email"
         bind:value={email}
         placeholder="alice@example.com"
-        autofocus
       />
       {#if email && !emailOk}
         <p class="mt-1 text-xs text-red-500">Looks like that isn't a valid email.</p>
