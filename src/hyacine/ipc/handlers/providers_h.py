@@ -34,16 +34,36 @@ def list_providers() -> dict[str, Any]:
 
 
 def current_provider() -> dict[str, Any]:
-    """Return the preset the pipeline will use based on the current YAML
-    config. Falls back to the default preset when unset."""
+    """Return the provider the pipeline would actually use right now.
+
+    Always returns a concrete provider — ``resolve()`` falls back to the
+    default preset when the config is empty or points at an unknown id —
+    so the frontend never has to guess what the runtime will see. The
+    ``resolved_from`` flag tells the UI which branch fired so it can hint
+    when a preset was missing ("stale config; using Claude Code OAuth").
+    """
     from hyacine.config import get_settings, load_yaml_config
 
     s = get_settings()
     cfg = load_yaml_config(s.config_path)
     pid = cfg.llm_provider
-    p = _providers.by_id(pid) if pid else _providers.default_provider()
-    if p is None:
-        return {"current": None, "fallback_to_default": True}
+    p = _providers.resolve(
+        provider_id=pid,
+        api_format=cfg.llm_api_format,
+        base_url=cfg.llm_base_url,
+        model=cfg.llm_model,
+    )
+
+    # Best-effort signal for the UI about why we ended up here.
+    if pid and _providers.by_id(pid) is not None:
+        resolved_from = "preset"
+    elif pid == "" and cfg.llm_api_format and cfg.llm_base_url:
+        resolved_from = "custom"
+    elif pid:
+        resolved_from = "fallback_default"
+    else:
+        resolved_from = "default"
+
     return {
         "current": {
             "id": p.id,
@@ -52,7 +72,8 @@ def current_provider() -> dict[str, Any]:
             "base_url": p.base_url,
             "default_model": p.default_model,
             "secret_slug": p.secret_slug,
-        }
+        },
+        "resolved_from": resolved_from,
     }
 
 

@@ -1,6 +1,6 @@
 """Backend for ``api_format = "openai_chat"``.
 
-Speaks the `/v1/chat/completions`` dialect: OpenAI proper, Azure, Groq,
+Speaks the ``/v1/chat/completions`` dialect: OpenAI proper, Azure, Groq,
 DeepSeek's OAI-style endpoint, Together, LM Studio and Ollama (both of
 which mirror the OpenAI API on their local servers).
 

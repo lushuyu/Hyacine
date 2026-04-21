@@ -54,9 +54,11 @@ class Provider:
     api_format: ApiFormat
 
     base_url: str
-    """Fully-qualified HTTPS root. Endpoint suffix (``/v1/messages`` etc.)
-    is appended by the concrete backend, so presets only set the host +
-    base path (e.g. ``https://api.deepseek.com/anthropic``)."""
+    """Fully-qualified URL (``http://`` for localhost / ``https://`` otherwise).
+    Endpoint suffix (``/v1/messages`` etc.) is appended by the concrete
+    backend, so presets only set the host + base path (e.g.
+    ``https://api.deepseek.com/anthropic`` or
+    ``http://localhost:11434/v1`` for a local Ollama)."""
 
     default_model: str
 
@@ -194,6 +196,61 @@ def default_provider() -> Provider:
     return BUILTIN_PRESETS[0]
 
 
+def resolve(
+    *,
+    provider_id: str = "",
+    api_format: str = "",
+    base_url: str = "",
+    model: str = "",
+) -> Provider:
+    """Build the Provider instance the dispatcher should call.
+
+    Resolution rules:
+
+    1. If ``provider_id`` names a built-in preset, we return that preset
+       with any non-empty ``base_url`` / ``model`` overrides applied.
+       This is what's persisted when the user picks a preset from the
+       wizard.
+    2. If ``provider_id`` is empty or unknown *and* ``api_format`` +
+       ``base_url`` are filled, construct an ad-hoc provider on the fly.
+       This covers the "Custom" wizard option where config.yaml carries
+       ``llm_api_format`` + ``llm_base_url`` instead of a preset id.
+    3. Otherwise fall back to :func:`default_provider` so the pipeline
+       runs with sane defaults even if config.yaml is stale.
+    """
+    preset = by_id(provider_id) if provider_id else None
+    if preset is not None:
+        if (base_url and base_url != preset.base_url) or (model and model != preset.default_model):
+            return Provider(
+                id=preset.id,
+                name=preset.name,
+                category=preset.category,
+                api_format=preset.api_format,
+                base_url=base_url or preset.base_url,
+                default_model=model or preset.default_model,
+                secret_slug=preset.secret_slug,
+                docs_url=preset.docs_url,
+                icon=preset.icon,
+                icon_color=preset.icon_color,
+                notes=preset.notes,
+                models=preset.models,
+            )
+        return preset
+
+    if api_format and base_url and api_format in ("anthropic_http", "openai_chat"):
+        return Provider(
+            id=provider_id or "custom",
+            name="Custom",
+            category="custom",
+            api_format=api_format,  # type: ignore[arg-type]
+            base_url=base_url,
+            default_model=model or "",
+            secret_slug=provider_id or "custom",
+        )
+
+    return default_provider()
+
+
 def as_dicts() -> list[dict[str, object]]:
     """Serialised form the IPC layer hands to the webview."""
     return [
@@ -222,4 +279,5 @@ __all__ = [
     "by_id",
     "default_provider",
     "as_dicts",
+    "resolve",
 ]

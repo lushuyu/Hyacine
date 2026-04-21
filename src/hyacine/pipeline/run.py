@@ -21,7 +21,7 @@ from datetime import UTC, datetime, timedelta
 from hyacine.config import Settings, YamlConfig, load_yaml_config
 from hyacine.db import Run, Watermark, init_db, session_scope
 from hyacine.llm import summarize
-from hyacine.llm.providers import by_id, default_provider
+from hyacine.llm.providers import resolve as resolve_provider
 from hyacine.models import FetchResult, RunRecord, RunStatus
 
 # Module-level settings singletons — overridable for tests via monkeypatch
@@ -217,16 +217,21 @@ def run_pipeline(now_utc: datetime | None = None) -> RunRecord:
     json_input = fetch_result.model_dump_json()
 
     try:
-        provider = by_id(cfg.llm_provider) if cfg.llm_provider else default_provider()
-        if provider is None:
-            raise RuntimeError(
-                f"llm_provider={cfg.llm_provider!r} is not a built-in preset. "
-                "Edit config.yaml or re-run the wizard."
-            )
-        # Providers that authenticate via an API key expect the secret in the
-        # env var `HYACINE_LLM_API_KEY` (the Rust parent populates this from
-        # keychain before spawning the sidecar). The CLI provider uses its
-        # own env conventions handled inside claude_code.summarize.
+        # Build the active provider from config. resolve() handles three
+        # cases uniformly: built-in preset by id, custom-endpoint
+        # (llm_api_format + llm_base_url in config), and stale/unknown id
+        # (falls back to the default preset).
+        provider = resolve_provider(
+            provider_id=cfg.llm_provider,
+            api_format=cfg.llm_api_format,
+            base_url=cfg.llm_base_url,
+            model=cfg.llm_model,
+        )
+        # Providers that authenticate via an API key expect the secret in
+        # `HYACINE_LLM_API_KEY` (the Rust parent populates this from the
+        # keychain slot matching the active provider). The CLI provider
+        # uses its own env conventions (CLAUDE_CODE_OAUTH_TOKEN) handled
+        # inside claude_code.summarize.
         api_key = os.environ.get("HYACINE_LLM_API_KEY", "")
         markdown = summarize(
             json_input,
