@@ -33,7 +33,7 @@ jobs:
           cache: npm
           cache-dependency-path: desktop/package-lock.json
       - name: Install frontend
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
       - name: Type-check
         run: npm run check
 
@@ -80,7 +80,7 @@ jobs:
           cache-dependency-path: desktop/package-lock.json
 
       - name: Install frontend
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       - name: Generate icons (dummy)
         run: npx --yes @tauri-apps/cli icon static/favicon.svg || true
