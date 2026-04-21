@@ -68,9 +68,14 @@ def probe_dns(**_: Any) -> dict[str, Any]:
 def probe_claude(api_key: str = "", model: str = "", **_: Any) -> dict[str, Any]:
     """Reachability probe for the Anthropic API.
 
-    Accepts two key shapes:
-      * ``sk-ant-*``          → sent as ``x-api-key`` (Console API key)
-      * anything else         → sent as ``Authorization: Bearer`` (OAuth token)
+    Anthropic issues two token shapes under the ``sk-ant-`` prefix:
+
+      * ``sk-ant-api*`` — Console API key → ``x-api-key`` header
+      * ``sk-ant-oat*`` — Claude Code OAuth token → ``Authorization: Bearer``
+
+    Anything else (bare bearer, JWT, etc.) goes through ``Authorization:
+    Bearer``. Sending an OAuth token in ``x-api-key`` produces a 401 with
+    ``{"message": "invalid x-api-key"}`` which is what motivated this split.
     """
     if not api_key:
         return {"kind": "claude", "status": "skipped", "latency_ms": 0, "detail": "no api key"}
@@ -78,7 +83,7 @@ def probe_claude(api_key: str = "", model: str = "", **_: Any) -> dict[str, Any]
     start = _now_ms()
 
     headers = {"anthropic-version": "2023-06-01", "content-type": "application/json"}
-    if api_key.startswith("sk-ant-"):
+    if api_key.startswith("sk-ant-api"):
         headers["x-api-key"] = api_key
     else:
         headers["authorization"] = f"Bearer {api_key}"

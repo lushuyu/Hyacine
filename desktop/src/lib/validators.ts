@@ -9,13 +9,32 @@ export function isEmail(v: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim());
 }
 
+/**
+ * Accepts the three token shapes that can drive Hyacine:
+ *   - `sk-ant-api…` — Console API key (x-api-key header)
+ *   - `sk-ant-oat…` — Claude Code OAuth setup token (Authorization: Bearer)
+ *   - anything else ≥ 40 chars without whitespace — bare OAuth/JWT bearer
+ *
+ * The last bucket is intentionally permissive: the existing
+ * `hyacine.llm.claude_code` pipeline requires `CLAUDE_CODE_OAUTH_TOKEN`
+ * which may not start with `sk-ant-` at all, depending on how the user
+ * obtained it. We'd rather let the connectivity test catch a bad token
+ * than block a valid one here.
+ */
 export function isClaudeKey(v: string): { ok: boolean; reason?: string } {
   const t = v.trim();
   if (!t) return { ok: false, reason: 'empty' };
-  if (!t.startsWith('sk-ant-')) return { ok: false, reason: 'expected prefix sk-ant-' };
-  if (t.length < 40) return { ok: false, reason: 'too short' };
   if (/\s/.test(t)) return { ok: false, reason: 'contains whitespace' };
+  if (t.length < 20) return { ok: false, reason: 'too short' };
   return { ok: true };
+}
+
+/** Describe the token flavour for UI hints ("will be sent as x-api-key" etc). */
+export function claudeKeyKind(v: string): 'console' | 'oauth' | 'bearer' {
+  const t = v.trim();
+  if (t.startsWith('sk-ant-api')) return 'console';
+  if (t.startsWith('sk-ant-oat') || t.startsWith('sk-') && t.includes('-oat')) return 'oauth';
+  return 'bearer';
 }
 
 export function maskKey(v: string): string {

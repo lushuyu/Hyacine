@@ -90,7 +90,11 @@
   <header class="space-y-2">
     <h1 class="text-2xl font-semibold">{$t('claudeTitle')}</h1>
     <p class="text-sm text-[rgb(var(--fg-muted))]">
-      You'll need an Anthropic API key (format <code class="rounded bg-[rgb(var(--border)/0.4)] px-1.5 py-0.5 text-[11px] font-mono">sk-ant-…</code>).
+      Paste either a Console API key
+      (<code class="rounded bg-[rgb(var(--border)/0.4)] px-1.5 py-0.5 text-[11px] font-mono">sk-ant-api…</code>)
+      or a Claude Code OAuth setup token
+      (<code class="rounded bg-[rgb(var(--border)/0.4)] px-1.5 py-0.5 text-[11px] font-mono">sk-ant-oat…</code>,
+      from <code>claude setup-token</code>).
     </p>
   </header>
 

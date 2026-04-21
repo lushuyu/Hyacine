@@ -65,14 +65,17 @@ pub async fn secrets_test_claude(api_key: String, model: Option<String>) -> AppR
         "messages": [{"role": "user", "content": "ping"}],
     });
 
-    // Accept both Anthropic Console API keys (x-api-key) and Claude Code
-    // OAuth tokens (Authorization: Bearer) — the latter is what the existing
-    // hyacine pipeline actually uses.
+    // Anthropic has two token families that *both* start with `sk-ant-`:
+    //  * Console API keys (sk-ant-api03-…) → x-api-key header
+    //  * Claude Code OAuth setup tokens (sk-ant-oat01-…) → Authorization: Bearer
+    // Anything else (pure bearer token, short-lived JWT, etc) also goes via
+    // Authorization: Bearer. Getting this wrong produces a 401 with
+    // 'invalid x-api-key' even though the token is correct.
     let mut req = client
         .post("https://api.anthropic.com/v1/messages")
         .header("anthropic-version", "2023-06-01")
         .header("content-type", "application/json");
-    req = if key.starts_with("sk-ant-") {
+    req = if key.starts_with("sk-ant-api") {
         req.header("x-api-key", key)
     } else {
         req.header("authorization", format!("Bearer {key}"))
