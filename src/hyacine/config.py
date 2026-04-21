@@ -117,6 +117,13 @@ class YamlConfig(BaseSettings):
     initial_watermark_lookback_hours: int = 24
     language: str = "en"                    # "en" or "zh-CN"
 
+    # Provider plumbing. When empty, the pipeline defaults to the
+    # `claude-code-oauth` preset (matches the historical behaviour —
+    # shell out to `claude` with a Claude Code OAuth token).
+    llm_provider: str = ""                  # preset id, e.g. "openai" / "deepseek-anthropic"
+    llm_base_url: str = ""                  # override for presets or custom providers
+    llm_api_format: str = ""                # override when not using a built-in preset
+
 
 def load_yaml_config(path: Path) -> YamlConfig:
     if not path.exists():

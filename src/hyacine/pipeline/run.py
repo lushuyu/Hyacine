@@ -13,13 +13,15 @@ Contract:
 """
 from __future__ import annotations
 
+import os
 import traceback
 import zoneinfo
 from datetime import UTC, datetime, timedelta
 
 from hyacine.config import Settings, YamlConfig, load_yaml_config
 from hyacine.db import Run, Watermark, init_db, session_scope
-from hyacine.llm.claude_code import summarize
+from hyacine.llm import summarize
+from hyacine.llm.providers import by_id, default_provider
 from hyacine.models import FetchResult, RunRecord, RunStatus
 
 # Module-level settings singletons — overridable for tests via monkeypatch
@@ -215,9 +217,22 @@ def run_pipeline(now_utc: datetime | None = None) -> RunRecord:
     json_input = fetch_result.model_dump_json()
 
     try:
+        provider = by_id(cfg.llm_provider) if cfg.llm_provider else default_provider()
+        if provider is None:
+            raise RuntimeError(
+                f"llm_provider={cfg.llm_provider!r} is not a built-in preset. "
+                "Edit config.yaml or re-run the wizard."
+            )
+        # Providers that authenticate via an API key expect the secret in the
+        # env var `HYACINE_LLM_API_KEY` (the Rust parent populates this from
+        # keychain before spawning the sidecar). The CLI provider uses its
+        # own env conventions handled inside claude_code.summarize.
+        api_key = os.environ.get("HYACINE_LLM_API_KEY", "")
         markdown = summarize(
             json_input,
             settings.prompt_path,
+            provider=provider,
+            api_key=api_key,
             model=cfg.llm_model,
             timeout_seconds=cfg.llm_timeout_seconds,
         )
