@@ -10,7 +10,6 @@ systemd-launched runs + the web process.
 """
 from __future__ import annotations
 
-import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime
@@ -91,67 +90,8 @@ def get_engine(db_path: Path) -> Engine:
     return _engine
 
 
-def _migrate_legacy_file(db_path: Path) -> None:
-    """If legacy ./data/briefing.db exists and the target doesn't, move it.
-
-    Safe under concurrent startup (web + run service): if another process
-    renamed the file between our exists() check and our rename() call, we
-    swallow the error and let the other caller finish the migration.
-    """
-    if db_path.exists():
-        return
-    legacy = db_path.parent / "briefing.db"
-    if not legacy.exists():
-        return
-    try:
-        legacy.rename(db_path)
-    except (FileNotFoundError, OSError):
-        return
-    for suffix in ("-shm", "-wal"):
-        src = legacy.with_name(legacy.name + suffix)
-        dst = db_path.with_name(db_path.name + suffix)
-        try:
-            if src.exists():
-                src.rename(dst)
-        except (FileNotFoundError, OSError):
-            continue
-
-
-def _migrate_legacy_schema(db_path: Path) -> None:
-    """Rename briefing_runs→runs and briefing_markdown→markdown, in place.
-
-    ALTER TABLE rename is not guarded by the sqlite_master snapshot under
-    concurrent startup, so we catch OperationalError and treat "already
-    migrated" as a no-op.
-    """
-    if not db_path.exists():
-        return
-    with sqlite3.connect(db_path) as conn:
-        tables = {
-            r[0] for r in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            )
-        }
-        if "briefing_runs" in tables and "runs" not in tables:
-            try:
-                conn.execute("ALTER TABLE briefing_runs RENAME TO runs")
-            except sqlite3.OperationalError:
-                pass
-        cols = {
-            r[1] for r in conn.execute("PRAGMA table_info(runs)")
-        }
-        if cols and "briefing_markdown" in cols and "markdown" not in cols:
-            try:
-                conn.execute(
-                    "ALTER TABLE runs RENAME COLUMN briefing_markdown TO markdown"
-                )
-            except sqlite3.OperationalError:
-                pass
-        conn.commit()
-
-
 def init_db(db_path: Path) -> None:
-    """Create tables and set PRAGMAs. Idempotent; migrates legacy schema.
+    """Create tables and set PRAGMAs. Idempotent.
 
     Also tightens filesystem perms: the parent dir is chmod 0700 and the
     DB file (plus any WAL/SHM siblings) chmod 0600, so the local database
@@ -160,8 +100,6 @@ def init_db(db_path: Path) -> None:
     support POSIX modes.
     """
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    _migrate_legacy_file(db_path)
-    _migrate_legacy_schema(db_path)
     engine = get_engine(db_path)
     Base.metadata.create_all(engine)
 

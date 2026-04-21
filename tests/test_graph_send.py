@@ -31,7 +31,6 @@ def test_render_html_body_escapes_script_tag() -> None:
 
 def test_send_email_posts_expected_body() -> None:
     """send_email should POST correctly shaped JSON to /me/sendMail."""
-    # (renamed test: was test_send_briefing_email_posts_expected_body)
     from hyacine.graph.send import send_email
 
     captured_payload: dict = {}
