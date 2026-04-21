@@ -96,16 +96,13 @@ jobs:
 
       - name: Bundle (Tauri)
         # tauri build runs `npm run build` internally via beforeBuildCommand,
-        # so we don't call it separately. `--ci` disables interactive prompts.
-        # Signing env vars are explicitly emptied so the bundler produces
-        # unsigned artifacts instead of aborting on missing keychain entries.
-        run: npm run tauri:build -- --target ${{ matrix.rust-target }} --ci
+        # so we don't call it separately. signingIdentity is set to null in
+        # tauri.conf.json so the bundler produces unsigned artifacts instead
+        # of aborting on missing keychain entries; the CI still needs
+        # CI=true for tauri-cli v2 non-interactive mode.
+        run: npm run tauri:build -- --target ${{ matrix.rust-target }}
         env:
-          TAURI_SIGNING_PRIVATE_KEY: ''
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
-          APPLE_CERTIFICATE: ''
-          APPLE_CERTIFICATE_PASSWORD: ''
-          APPLE_SIGNING_IDENTITY: '-'
+          CI: 'true'
 
       - name: Upload installer
         uses: actions/upload-artifact@v4

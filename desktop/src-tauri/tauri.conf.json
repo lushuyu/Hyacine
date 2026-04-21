@@ -43,7 +43,14 @@
     "category": "Productivity",
     "shortDescription": "Daily Outlook briefing, powered by Claude.",
     "longDescription": "Hyacine aggregates your Outlook mail and calendar every morning, passes the structured data to Claude, and delivers a prioritised briefing back to your inbox.",
-    "resources": []
+    "resources": [],
+    "macOS": {
+      "signingIdentity": null,
+      "minimumSystemVersion": "10.15"
+    },
+    "windows": {
+      "digestAlgorithm": "sha256"
+    }
   },
   "plugins": {}
 }
