@@ -196,7 +196,10 @@ impl SidecarState {
 
 async fn handle_frame(app: &AppHandle, pending: &Pending, line: &str) {
     let Ok(v) = serde_json::from_str::<Value>(line) else {
-        tracing::warn!("non-json sidecar line: {line}");
+        // If Python ever prints outside the RPC channel (a stray print in a
+        // traceback, etc.) it could theoretically carry a token. Scrub
+        // before tracing, same as the stderr path.
+        tracing::warn!("non-json sidecar line: {}", crate::redact::scrub(line));
         return;
     };
 
