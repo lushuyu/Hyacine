@@ -37,8 +37,12 @@ jobs:
       - name: Type-check
         run: npm run check
 
-  build:
-    name: Tauri build (${{ matrix.os }})
+  compile:
+    # We only verify that the Tauri shell *compiles* on every matrix OS.
+    # Producing installer bundles (.dmg/.msi/.AppImage) requires signing
+    # material that CI doesn't carry, so we leave that to the release
+    # workflow. This job catches Rust compile regressions on every PR.
+    name: Rust compile (${{ matrix.os }})
     needs: check
     strategy:
       fail-fast: false
@@ -61,9 +65,21 @@ jobs:
         if: matrix.os == 'ubuntu-22.04'
         run: |
           sudo apt-get update
+          # Full tauri v2 build-time deps — gdk-3.0 comes from libgtk-3-dev,
+          # the ayatana appindicator fork replaced the unmaintained original,
+          # libxdo is required by tauri-plugin-global-shortcut & friends.
           sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev \
-            patchelf libssl-dev
+            build-essential \
+            curl \
+            file \
+            wget \
+            libayatana-appindicator3-dev \
+            libgtk-3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev \
+            patchelf
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -82,20 +98,13 @@ jobs:
       - name: Install frontend
         run: npm ci --no-audit --no-fund
 
-      - name: Generate icons (dummy)
-        run: npx --yes @tauri-apps/cli icon static/favicon.svg || true
+      # tauri::generate_context! inspects the frontend dist — build once.
+      - name: Build frontend
+        run: npm run build
 
-      - name: Build
-        run: npm run tauri:build -- --target ${{ matrix.rust-target }}
-        env:
-          # Builds without code-signing on CI for now; release jobs set these.
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      - name: Generate icons
+        run: npx --yes @tauri-apps/cli icon static/favicon.svg
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: hyacine-desktop-${{ matrix.os }}
-          path: |
-            desktop/src-tauri/target/*/release/bundle/**
-          if-no-files-found: warn
+      - name: Cargo check
+        working-directory: desktop/src-tauri
+        run: cargo check --locked --target ${{ matrix.rust-target }}
