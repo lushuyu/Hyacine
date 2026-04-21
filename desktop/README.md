@@ -77,6 +77,24 @@ approval:
 - **Windows**: SmartScreen → More info → *Run anyway*
 - **Linux**: `chmod +x` the `.AppImage` and run it
 
+## LLM providers
+
+v1.0 introduces a provider catalogue — Hyacine no longer assumes Claude.
+Each provider is one row in
+[`src/hyacine/llm/providers.py`](../src/hyacine/llm/providers.py) and
+comes in one of three flavours:
+
+| `api_format`     | Wire format                              | Typical providers                                                   |
+| ---------------- | ---------------------------------------- | ------------------------------------------------------------------- |
+| `anthropic_cli`  | `claude -p …` subprocess (OAuth)         | Claude Code OAuth (default)                                         |
+| `anthropic_http` | `POST /v1/messages` with `x-api-key`     | Anthropic Console, DeepSeek, Kimi, Zhipu GLM, OpenRouter, AiHubMix  |
+| `openai_chat`    | `POST /v1/chat/completions` with Bearer  | OpenAI, Azure, Groq, LM Studio, Ollama, any custom endpoint         |
+
+Built-in presets ship for Claude Code, Anthropic Console, DeepSeek, Kimi,
+Zhipu GLM, OpenAI, Groq, and local Ollama. Anything else goes through the
+**Custom** picker entry — pick a format, paste a base URL and (if needed)
+a key.
+
 ## Wizard flow
 
 | Step | Path                      | Purpose                                              |
@@ -86,7 +104,7 @@ approval:
 |    2 | `/wizard/identity`        | name / role / identity blurb                         |
 |    3 | `/wizard/priorities`      | tag chips that promote mail to the top               |
 |    4 | `/wizard/delivery`        | recipient email, timezone, output language           |
-|    5 | `/wizard/claude`          | API key (masked, keychain-stored, tested live)       |
+|    5 | `/wizard/provider`        | provider picker + per-format form + live ping        |
 |    6 | `/wizard/graph`           | Microsoft device-code OAuth with polling animation   |
 |    7 | `/wizard/connectivity`    | DNS / Claude / Graph / SendMail probes in parallel   |
 |    8 | `/wizard/preview`         | dry-run pipeline, render HTML in sandboxed iframe    |
@@ -95,12 +113,20 @@ approval:
 ## Security
 
 - API keys are stored in the OS keychain (`keyring` crate): macOS Keychain,
-  Windows DPAPI, Linux Secret Service.
+  Windows DPAPI, Linux Secret Service. One slot per provider (slug = preset
+  id), so a user can keep multiple tokens side-by-side.
 - Secrets never round-trip to the webview; only `has_key: bool` does.
-- CSP restricts `connect-src` to `api.anthropic.com`, `graph.microsoft.com`
-  and `login.microsoftonline.com`.
+- The Rust parent reads the active provider's slot on sidecar spawn and
+  exports the value as `CLAUDE_CODE_OAUTH_TOKEN` (for `anthropic_cli`) or
+  `HYACINE_LLM_API_KEY` (for the HTTP backends); `ANTHROPIC_API_KEY` and
+  `ANTHROPIC_AUTH_TOKEN` are scrubbed before spawn.
+- CSP restricts `connect-src` to `api.anthropic.com`, `graph.microsoft.com`,
+  and `login.microsoftonline.com` for the webview itself; the Python sidecar
+  makes the actual LLM requests and is allowed arbitrary hosts (so custom
+  providers work).
 - Preview iframe is `sandbox=""` so rendered HTML has no privileges.
-- Tracing redacts `sk-ant-…` patterns via the shared `redactKeys` helper.
+- Tracing redacts `sk-ant-…` / `…-oat01-…` / `Bearer …` patterns via the
+  shared `redact::scrub` helper, on both the Rust and webview sides.
 
 ## Directory layout
 
