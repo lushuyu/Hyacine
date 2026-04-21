@@ -8,12 +8,12 @@
   import type { UnlistenFn } from '@tauri-apps/api/event';
 
   const stages = ['fetch', 'classify', 'llm', 'render', 'deliver'] as const;
-  const labels: Record<(typeof stages)[number], string> = {
-    fetch: 'Fetch inbox & calendar',
-    classify: 'Classify messages',
-    llm: 'Invoke Claude',
-    render: 'Render HTML',
-    deliver: 'Deliver (dry run)'
+  const labelKey: Record<(typeof stages)[number], Parameters<typeof $t>[0]> = {
+    fetch: 'previewStageFetch',
+    classify: 'previewStageClassify',
+    llm: 'previewStageLlm',
+    render: 'previewStageRender',
+    deliver: 'previewStageDeliver'
   };
 
   let status = $state<Record<string, 'pending' | 'running' | 'ok' | 'fail'>>({
@@ -98,9 +98,7 @@
 <div class="space-y-6 animate-fade-in">
   <header class="space-y-2">
     <h1 class="text-2xl font-semibold">{$t('previewTitle')}</h1>
-    <p class="text-sm text-[rgb(var(--fg-muted))]">
-      We'll run the full pipeline once without sending an email, so you can see what Claude produces.
-    </p>
+    <p class="text-sm text-[rgb(var(--fg-muted))]">{$t('previewSubtitle')}</p>
   </header>
 
   <!-- stages -->
@@ -118,7 +116,7 @@
             <span class="h-1.5 w-1.5 rounded-full bg-[rgb(var(--border))]"></span>
           {/if}
         </div>
-        <span class:text-[rgb(var(--fg-muted))]={status[s] === 'pending'}>{labels[s]}</span>
+        <span class:text-[rgb(var(--fg-muted))]={status[s] === 'pending'}>{$t(labelKey[s])}</span>
       </div>
     {/each}
   </div>
@@ -128,7 +126,7 @@
     <div class="space-y-2">
       <div class="flex items-center justify-between">
         <h2 class="text-xs font-semibold uppercase tracking-wider text-[rgb(var(--fg-muted))]">
-          Rendered preview
+          {$t('previewHeader')}
         </h2>
         <div class="text-xs text-[rgb(var(--fg-muted))]">
           {result.duration_ms} ms
@@ -144,7 +142,7 @@
       </div>
       {#if result.subject}
         <p class="text-xs text-[rgb(var(--fg-muted))]">
-          Subject: <span class="font-mono">{result.subject}</span>
+          {$t('previewSubject')}: <span class="font-mono">{result.subject}</span>
         </p>
       {/if}
     </div>
@@ -153,7 +151,7 @@
   <div class="flex justify-between">
     <button class="btn-secondary" disabled={running} onclick={runPreview}>
       <Play size="14" />
-      {running ? 'Running…' : 'Run again'}
+      {running ? $t('running') : $t('previewRun')}
     </button>
     <button class="btn-primary" disabled={!done} onclick={next}>{$t('continue')}</button>
   </div>

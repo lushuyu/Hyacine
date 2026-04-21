@@ -81,9 +81,7 @@
 <div class="space-y-8 animate-fade-in">
   <header class="space-y-2">
     <h1 class="text-2xl font-semibold">{$t('graphTitle')}</h1>
-    <p class="text-sm text-[rgb(var(--fg-muted))]">
-      Hyacine uses Microsoft Graph device-code sign-in — no password leaves your machine.
-    </p>
+    <p class="text-sm text-[rgb(var(--fg-muted))]">{$t('graphSubtitle')}</p>
   </header>
 
   {#if flow === 'idle' || flow === 'awaiting_user'}
@@ -100,9 +98,7 @@
             <Loader2 size="22" class="animate-spin" />
           </div>
         </div>
-        <p class="text-sm text-[rgb(var(--fg-muted))]">
-          Enter this code on the Microsoft sign-in page:
-        </p>
+        <p class="text-sm text-[rgb(var(--fg-muted))]">{$t('graphEnterCode')}</p>
         <div class="flex items-center gap-2">
           <code
             class="rounded-lg bg-[rgb(var(--border)/0.35)] px-5 py-3 font-mono text-2xl tracking-[0.3em]"
@@ -137,7 +133,7 @@
           <Check size="18" />
         </div>
         <div>
-          <div class="text-sm font-semibold">Signed in</div>
+          <div class="text-sm font-semibold">{$t('graphSignedIn')}</div>
           <div class="text-xs text-[rgb(var(--fg-muted))]">{user}</div>
         </div>
       </div>
@@ -145,7 +141,7 @@
   {:else if flow === 'failed' || flow === 'cancelled'}
     <div class="card p-6 space-y-3 border-red-500/40">
       <div class="text-sm font-medium text-red-500">
-        {flow === 'cancelled' ? 'Cancelled' : 'Sign-in failed'}
+        {flow === 'cancelled' ? $t('graphCancelled') : $t('graphFailed')}
       </div>
       {#if detail}
         <div class="text-xs font-mono text-[rgb(var(--fg-muted))]">{detail}</div>
@@ -155,7 +151,7 @@
         onclick={async () => {
           flow = 'idle';
           await ipc.graph.startDeviceFlow();
-        }}>Try again</button
+        }}>{$t('retry')}</button
       >
     </div>
   {/if}

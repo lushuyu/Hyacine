@@ -1,7 +1,9 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { ipc } from '$lib/ipc';
+  import { formatError } from '$lib/provider-presets';
   import { pushToast } from '$lib/stores';
+  import { t } from '$lib/i18n';
   import { Save, Play } from 'lucide-svelte';
 
   let content = $state('');
@@ -16,7 +18,7 @@
       content = r.content;
       original = r.content;
     } catch (e) {
-      pushToast('error', String(e));
+      pushToast('error', formatError(e));
     }
   });
 
@@ -25,9 +27,9 @@
     try {
       await ipc.config.writePrompt(content);
       original = content;
-      pushToast('success', 'Prompt saved');
+      pushToast('success', $t('promptSaved'));
     } catch (e) {
-      pushToast('error', String(e));
+      pushToast('error', formatError(e));
     } finally {
       saving = false;
     }
@@ -41,7 +43,9 @@
       const r = await ipc.pipeline.dryRun();
       pushToast(
         r.ok ? 'success' : 'error',
-        r.ok ? `Dry run succeeded in ${r.duration_ms}ms` : `Failed: ${r.error}`
+        r.ok
+          ? `${$t('promptDryRunSucceeded')} ${r.duration_ms}ms`
+          : `${$t('providerBad')}: ${r.error ?? ''}`
       );
     } finally {
       testing = false;
@@ -52,19 +56,17 @@
 <div class="mx-auto max-w-4xl px-8 py-10 space-y-6">
   <header class="flex items-center justify-between">
     <div class="space-y-1">
-      <h1 class="text-2xl font-semibold">Prompt Lab</h1>
-      <p class="text-sm text-[rgb(var(--fg-muted))]">
-        This is the system prompt Claude sees on every run.
-      </p>
+      <h1 class="text-2xl font-semibold">{$t('promptTitle')}</h1>
+      <p class="text-sm text-[rgb(var(--fg-muted))]">{$t('promptSubtitle')}</p>
     </div>
     <div class="flex gap-2">
       <button class="btn-secondary" onclick={testPrompt} disabled={testing}>
         <Play size="14" />
-        {testing ? 'Running…' : 'Dry-run'}
+        {testing ? $t('running') : $t('promptDryRun')}
       </button>
       <button class="btn-primary" onclick={save} disabled={!dirty || saving}>
         <Save size="14" />
-        {saving ? 'Saving…' : 'Save'}
+        {saving ? $t('saving') : $t('save')}
       </button>
     </div>
   </header>

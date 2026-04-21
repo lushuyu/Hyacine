@@ -8,11 +8,11 @@
   import { slide } from 'svelte/transition';
 
   const kinds: ProbeKind[] = ['dns', 'claude', 'graph', 'sendmail'];
-  const labels: Record<ProbeKind, string> = {
-    dns: 'DNS + outbound TCP',
-    claude: 'Anthropic API',
-    graph: 'Microsoft Graph',
-    sendmail: 'SendMail (test to self)'
+  const labelKey: Record<ProbeKind, Parameters<typeof $t>[0]> = {
+    dns: 'connectivityDns',
+    claude: 'connectivityClaude',
+    graph: 'connectivityGraph',
+    sendmail: 'connectivitySendmail'
   };
 
   let results = $state<Record<ProbeKind, ProbeResult | null>>({
@@ -106,9 +106,7 @@
 <div class="space-y-6 animate-fade-in">
   <header class="space-y-2">
     <h1 class="text-2xl font-semibold">{$t('connectivityTitle')}</h1>
-    <p class="text-sm text-[rgb(var(--fg-muted))]">
-      Four checks in parallel — they should finish in a few seconds.
-    </p>
+    <p class="text-sm text-[rgb(var(--fg-muted))]">{$t('connectivitySubtitle')}</p>
   </header>
 
   <div class="space-y-2">
@@ -136,14 +134,18 @@
             {/if}
           </div>
           <div class="flex-1">
-            <div class="text-sm font-medium">{labels[k]}</div>
+            <div class="text-sm font-medium">{$t(labelKey[k])}</div>
             <div class="text-xs text-[rgb(var(--fg-muted))]">
               {#if skipped}
-                Not running (optional)
+                {$t('connectivityStatusNotRunning')}
               {:else if isRunning}
-                Running…
+                {$t('connectivityStatusRunning')}
               {:else if r}
-                {r.status === 'ok' ? 'OK' : r.status === 'fail' ? 'Failed' : 'Skipped'}
+                {r.status === 'ok'
+                  ? $t('connectivityStatusOk')
+                  : r.status === 'fail'
+                    ? $t('connectivityStatusFail')
+                    : $t('connectivityStatusSkipped')}
                 {#if r.latency_ms}· {r.latency_ms}ms{/if}
               {/if}
             </div>
@@ -182,11 +184,11 @@
       onchange={() => runAll()}
       class="h-4 w-4 rounded border-[rgb(var(--border))] accent-brand-500"
     />
-    Also send a one-time test email to myself
+    {$t('connectivityIncludeSendmail')}
   </label>
 
   <div class="flex items-center justify-between">
-    <button class="btn-ghost" onclick={runAll}>Re-run checks</button>
+    <button class="btn-ghost" onclick={runAll}>{$t('connectivityRerun')}</button>
     <div class="flex gap-2">
       <button class="btn-ghost" onclick={next}>{$t('skip')}</button>
       <button class="btn-primary" disabled={!allDone || !allOk} onclick={next}>

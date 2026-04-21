@@ -3,12 +3,13 @@
   import { goto } from '$app/navigation';
   import { fade, scale } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
+  import { t } from '$lib/i18n';
 
   let mounted = $state(false);
   onMount(() => {
     mounted = true;
-    const t = setTimeout(() => goto('/wizard/welcome/'), 1400);
-    return () => clearTimeout(t);
+    const tid = setTimeout(() => goto('/wizard/welcome/'), 1400);
+    return () => clearTimeout(tid);
   });
 </script>
 
@@ -38,10 +39,8 @@
       </svg>
     </div>
     <div in:fade={{ duration: 500, delay: 400 }} class="text-center">
-      <h1 class="text-3xl font-semibold tracking-tight">Hyacine</h1>
-      <p class="mt-2 text-sm text-[rgb(var(--fg-muted))]">
-        Your daily briefing, written by Claude.
-      </p>
+      <h1 class="text-3xl font-semibold tracking-tight">{$t('appName')}</h1>
+      <p class="mt-2 text-sm text-[rgb(var(--fg-muted))]">{$t('tagline')}</p>
     </div>
   {/if}
 </div>
