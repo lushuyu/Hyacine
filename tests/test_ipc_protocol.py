@@ -1,9 +1,16 @@
 """Round-trip tests for the JSON-RPC sidecar protocol.
 
-Covers three things:
+Covers:
   * frame parsing (happy path + garbage)
   * the dispatch loop routes a known method and formats the response
-  * notifications (no `id`) are emitted verbatim to stdout
+  * params shape validation — object vs array vs anything else
+  * handler arity mismatches surface as INVALID_PARAMS instead of crashing
+
+Note on notifications (requests without an ``id``): the JSON-RPC 2.0 spec
+requires the server *not* to respond to them, and our ``serve`` loop follows
+that rule. The sidecar emits *its own* notifications outbound (progress
+events, OAuth polling updates) — those are sent via the ``emit()`` callback
+that ``router.build_handlers`` is given, not in response to a request.
 """
 from __future__ import annotations
 
