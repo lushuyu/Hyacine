@@ -147,8 +147,8 @@ impl SidecarState {
         let line = serde_json::to_string(&frame)? + "\n";
 
         {
-            let guard = self.inner.lock().await;
-            let inner = match guard.as_ref() {
+            let mut guard = self.inner.lock().await;
+            let inner = match guard.as_mut() {
                 Some(v) => v,
                 None => {
                     // No child — leak would never happen since we haven't sent
