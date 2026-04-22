@@ -3,6 +3,7 @@
   import { wizard, setTheme, type Theme } from '$lib/stores';
   import { lang, t } from '$lib/i18n';
   import { ipc } from '$lib/ipc';
+  import Pansy from '$lib/brand/Pansy.svelte';
   import { Moon, Sun, MonitorSmartphone } from 'lucide-svelte';
 
   const langs: Array<{ value: 'en' | 'zh-CN'; label: string }> = [
@@ -34,23 +35,28 @@
   }
 </script>
 
-<div class="space-y-10 animate-fade-in">
-  <header class="space-y-2 text-center">
-    <h1 class="text-3xl font-semibold tracking-tight">{$t('welcome')}</h1>
-    <p class="text-sm text-[rgb(var(--fg-muted))]">{$t('tagline')}</p>
+<div class="animate-fade-in space-y-9 text-center">
+  <header class="flex flex-col items-center gap-4">
+    <Pansy size={52} />
+    <div class="space-y-2">
+      <h1 class="serif text-4xl font-semibold text-[rgb(var(--fg))]">
+        {$t('welcome')}
+      </h1>
+      <p class="text-sm text-[rgb(var(--fg-muted))]">{$t('tagline')}</p>
+    </div>
   </header>
 
-  <section class="space-y-3">
-    <h2 class="text-xs font-semibold uppercase tracking-wider text-[rgb(var(--fg-muted))]">
+  <section class="space-y-3 text-left">
+    <h2 class="text-xs font-semibold text-[rgb(var(--fg-muted))]">
       {$t('language')}
     </h2>
     <div class="grid grid-cols-2 gap-3">
       {#each langs as l (l.value)}
+        {@const active = $wizard.lang === l.value}
         <button
-          class="card flex items-center justify-center px-4 py-4 text-sm font-medium transition-all"
-          class:ring-2={$wizard.lang === l.value}
-          class:ring-brand-400={$wizard.lang === l.value}
-          class:shadow-md={$wizard.lang === l.value}
+          class="pick-card flex items-center justify-center text-[15px] font-medium"
+          class:pick-card-selected={active}
+          class:text-[rgb(var(--accent))]={active}
           onclick={() => pickLang(l.value)}
         >
           {l.label}
@@ -59,27 +65,28 @@
     </div>
   </section>
 
-  <section class="space-y-3">
-    <h2 class="text-xs font-semibold uppercase tracking-wider text-[rgb(var(--fg-muted))]">
+  <section class="space-y-3 text-left">
+    <h2 class="text-xs font-semibold text-[rgb(var(--fg-muted))]">
       {$t('theme')}
     </h2>
     <div class="grid grid-cols-3 gap-3">
       {#each themes as th (th.value)}
         {@const Icon = th.icon}
+        {@const active = $wizard.theme === th.value}
         <button
-          class="card flex flex-col items-center gap-2 px-4 py-5 text-sm font-medium transition-all"
-          class:ring-2={$wizard.theme === th.value}
-          class:ring-brand-400={$wizard.theme === th.value}
+          class="pick-card flex flex-col items-center gap-2 py-5 text-[13px] font-medium"
+          class:pick-card-selected={active}
+          class:text-[rgb(var(--accent))]={active}
           onclick={() => pickTheme(th.value)}
         >
-          <Icon size="20" />
+          <Icon size="22" />
           {th.label}
         </button>
       {/each}
     </div>
   </section>
 
-  <div class="flex justify-end pt-4">
-    <button class="btn-primary" onclick={next}>{$t('getStarted')}</button>
+  <div class="flex justify-end pt-2">
+    <button class="btn-primary px-6" onclick={next}>{$t('getStarted')}</button>
   </div>
 </div>

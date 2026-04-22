@@ -1,10 +1,19 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
   <defs>
-    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#a78bfa" />
-      <stop offset="1" stop-color="#6d28d9" />
+    <linearGradient id="hyFav" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#F4B6C9" />
+      <stop offset="0.5" stop-color="#C9B8F0" />
+      <stop offset="1" stop-color="#A8D5F5" />
     </linearGradient>
   </defs>
-  <rect width="64" height="64" rx="14" fill="url(#g)" />
-  <path d="M18 44 V20 H26 V30 H38 V20 H46 V44 H38 V34 H26 V44 Z" fill="#fff" />
+  <rect width="64" height="64" rx="18" fill="url(#hyFav)" />
+  <path d="M20 46 V18 H26 V30 H38 V18 H44 V46 H38 V36 H26 V46 Z" fill="#fff" opacity="0.96" />
+  <g transform="translate(46,46)" opacity="0.9">
+    <ellipse cx="0" cy="-6" rx="3.2" ry="4.6" fill="#fff" opacity="0.85" />
+    <ellipse cx="5.7" cy="-1.9" rx="3.2" ry="4.6" transform="rotate(72 5.7 -1.9)" fill="#fff" opacity="0.85" />
+    <ellipse cx="3.5" cy="4.9" rx="3.2" ry="4.6" transform="rotate(144 3.5 4.9)" fill="#fff" opacity="0.85" />
+    <ellipse cx="-3.5" cy="4.9" rx="3.2" ry="4.6" transform="rotate(216 -3.5 4.9)" fill="#fff" opacity="0.85" />
+    <ellipse cx="-5.7" cy="-1.9" rx="3.2" ry="4.6" transform="rotate(288 -5.7 -1.9)" fill="#fff" opacity="0.85" />
+    <circle cx="0" cy="0" r="1.5" fill="#E8C77A" />
+  </g>
 </svg>

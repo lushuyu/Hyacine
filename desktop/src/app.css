@@ -2,28 +2,56 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+  Hyacine design system — aurora palette, pansy motif, serif display.
+  Tokens mirror brand.jsx from the Hyacine Promo design bundle so the real
+  app and the promo renders stay visually aligned.
+*/
+
 @layer base {
   :root {
-    --bg: 253 252 255;
+    /* page + surface */
+    --bg: 250 247 252;        /* #FAF7FC — faint lavender off-white */
     --bg-elev: 255 255 255;
-    --fg: 23 23 30;
-    --fg-muted: 100 104 120;
-    --border: 226 228 237;
-    --accent: 139 92 246;
+    --bg-chrome: 251 250 253; /* #FBFAFD — window chrome */
+
+    /* type */
+    --fg: 42 31 61;           /* #2A1F3D — ink */
+    --fg-muted: 139 123 163;  /* #8B7BA3 — muted purple */
+
+    /* lines + accent */
+    --border: 239 234 245;    /* #EFEAF5 — line */
+    --accent: 168 144 224;    /* #A890E0 — lavender deep */
     --accent-fg: 255 255 255;
+    --accent-soft: 201 184 240; /* #C9B8F0 — lavender */
+
+    /* signal */
+    --pink: 244 182 201;
+    --pink-deep: 232 155 180;
+    --sky: 168 213 245;
+    --gold: 232 199 122;
+    --mint: 189 227 200;
+    --plum: 61 42 90;
+
     --danger: 220 38 38;
     --success: 22 163 74;
     --warn: 217 119 6;
+
+    --shadow-plum: 61 42 90;
   }
+
   .dark {
-    --bg: 12 12 16;
-    --bg-elev: 22 22 28;
-    --fg: 237 237 244;
-    --fg-muted: 148 152 168;
-    --border: 40 42 52;
-    --accent: 167 139 250;
-    --accent-fg: 17 17 22;
+    --bg: 26 16 40;           /* #1A1028 */
+    --bg-elev: 42 31 61;      /* #2A1F3D */
+    --bg-chrome: 35 25 52;
+    --fg: 245 240 252;
+    --fg-muted: 184 168 208;
+    --border: 61 46 90;
+    --accent: 201 184 240;    /* lavender pops in dark */
+    --accent-fg: 26 16 40;
+    --accent-soft: 168 144 224;
   }
+
   html,
   body,
   #app {
@@ -32,7 +60,8 @@
   body {
     background: rgb(var(--bg));
     color: rgb(var(--fg));
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-family: 'Inter', 'Noto Sans SC', -apple-system, BlinkMacSystemFont,
+      'Segoe UI', sans-serif;
     font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
@@ -42,57 +71,145 @@
     -webkit-tap-highlight-color: transparent;
   }
   ::selection {
-    background: rgb(var(--accent) / 0.25);
+    background: rgb(var(--accent) / 0.28);
+  }
+
+  /* serif display — used for marquee titles that match the promo set */
+  .serif {
+    font-family: 'Noto Serif SC', ui-serif, Georgia, Cambria, serif;
+    letter-spacing: -0.01em;
   }
 }
 
 @layer components {
+  /* Buttons — primary is the signature lavender→pink gradient */
   .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium
-           transition-all duration-150 ease-out outline-none
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5
+           text-sm font-medium transition-all duration-200 ease-out outline-none
            focus-visible:ring-2 focus-visible:ring-brand-400 focus-visible:ring-offset-2
+           focus-visible:ring-offset-[rgb(var(--bg))]
            disabled:cursor-not-allowed disabled:opacity-40;
   }
   .btn-primary {
-    @apply btn bg-[rgb(var(--accent))] text-[rgb(var(--accent-fg))]
-           hover:brightness-110 active:scale-[0.98] shadow-sm;
+    @apply btn text-white border border-transparent;
+    background-image: linear-gradient(135deg, #a890e0 0%, #e89bb4 100%);
+    box-shadow: 0 4px 14px rgba(168, 144, 224, 0.55),
+      inset 0 1px 0 rgba(255, 255, 255, 0.25);
+  }
+  .btn-primary:hover:not(:disabled) {
+    filter: brightness(1.05) saturate(1.05);
+    transform: translateY(-1px);
+    box-shadow: 0 8px 22px rgba(168, 144, 224, 0.55),
+      inset 0 1px 0 rgba(255, 255, 255, 0.3);
+  }
+  .btn-primary:active:not(:disabled) {
+    transform: translateY(0) scale(0.985);
   }
   .btn-secondary {
     @apply btn bg-[rgb(var(--bg-elev))] text-[rgb(var(--fg))]
-           border border-[rgb(var(--border))] hover:bg-[rgb(var(--border)/0.3)];
+           border border-[rgb(var(--border))];
+  }
+  .btn-secondary:hover:not(:disabled) {
+    background: rgb(var(--accent-soft) / 0.2);
+    border-color: rgb(var(--accent-soft) / 0.6);
   }
   .btn-ghost {
-    @apply btn text-[rgb(var(--fg-muted))] hover:text-[rgb(var(--fg))]
-           hover:bg-[rgb(var(--border)/0.35)];
+    @apply btn text-[rgb(var(--fg-muted))]
+           hover:text-[rgb(var(--fg))] hover:bg-[rgb(var(--accent-soft)/0.18)];
   }
+
+  /* Inputs */
   .input {
-    @apply w-full rounded-lg border border-[rgb(var(--border))]
+    @apply w-full rounded-xl border border-[rgb(var(--border))]
            bg-[rgb(var(--bg-elev))] px-3.5 py-2.5 text-sm text-[rgb(var(--fg))]
            placeholder:text-[rgb(var(--fg-muted))]
            transition-all duration-150
            focus:outline-none focus:ring-2 focus:ring-brand-400/60 focus:border-brand-400;
   }
+
+  /* Cards — soft aurora shadow */
   .card {
-    @apply rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--bg-elev))]
-           shadow-sm;
+    @apply rounded-2xl border border-[rgb(var(--border))] bg-[rgb(var(--bg-elev))]
+           shadow-card-hy;
   }
+  .card-interactive {
+    @apply card cursor-pointer transition-all duration-200;
+  }
+  .card-interactive:hover {
+    border-color: rgb(var(--accent-soft) / 0.8);
+    box-shadow: 0 8px 24px rgba(61, 42, 90, 0.08),
+      0 1px 2px rgba(61, 42, 90, 0.04);
+    transform: translateY(-1px);
+  }
+
+  /* Pick-card — the language / theme tile from the HyacineAppUI mockup */
+  .pick-card {
+    @apply cursor-pointer rounded-xl border border-[rgb(var(--border))]
+           bg-[rgb(var(--bg-elev))] px-5 py-4
+           transition-all duration-200 ease-out
+           hover:-translate-y-0.5;
+  }
+  .pick-card-selected {
+    border-width: 2px;
+    border-color: rgb(var(--accent));
+    background-image: linear-gradient(135deg, #fdfaff 0%, #f5f0fc 100%);
+    box-shadow: 0 4px 12px rgba(201, 184, 240, 0.4),
+      inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  }
+  .dark .pick-card-selected {
+    background-image: linear-gradient(135deg, rgba(168, 144, 224, 0.18) 0%, rgba(232, 155, 180, 0.12) 100%);
+  }
+
+  /* Chips */
   .chip {
     @apply inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium
            border border-[rgb(var(--border))] bg-[rgb(var(--bg-elev))]
            transition-all duration-150;
   }
   .chip-active {
-    @apply bg-[rgb(var(--accent))] text-[rgb(var(--accent-fg))] border-[rgb(var(--accent))];
+    background-image: linear-gradient(135deg, #a890e0 0%, #e89bb4 100%);
+    color: #fff;
+    border-color: transparent;
+    box-shadow: 0 2px 8px rgba(168, 144, 224, 0.45);
   }
+
+  /* Glow — used by device-flow pulses etc. */
   .glow {
     box-shadow: 0 0 0 1px rgb(var(--accent) / 0.2),
-      0 8px 32px -8px rgb(var(--accent) / 0.4);
+      0 12px 40px -8px rgb(var(--accent) / 0.55);
+  }
+
+  /* Aurora backdrop — radial pastels over a soft linear wash.
+     Sits at z -10 so any card above gets the dreamy tint without being tinted itself. */
+  .aurora {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: -10;
+    background-image:
+      radial-gradient(ellipse 80% 60% at 20% 20%, rgba(244, 182, 201, 0.55) 0%, transparent 55%),
+      radial-gradient(ellipse 70% 55% at 85% 25%, rgba(201, 184, 240, 0.65) 0%, transparent 55%),
+      radial-gradient(ellipse 90% 65% at 70% 85%, rgba(168, 213, 245, 0.55) 0%, transparent 60%),
+      radial-gradient(ellipse 60% 50% at 15% 85%, rgba(189, 227, 200, 0.5) 0%, transparent 55%),
+      linear-gradient(160deg, #fff4f8 0%, #f0e8fb 50%, #e6f2fb 100%);
+  }
+  .dark .aurora {
+    background-image:
+      radial-gradient(ellipse 80% 60% at 20% 20%, rgba(244, 182, 201, 0.22) 0%, transparent 55%),
+      radial-gradient(ellipse 70% 55% at 85% 25%, rgba(201, 184, 240, 0.28) 0%, transparent 55%),
+      radial-gradient(ellipse 90% 65% at 70% 85%, rgba(168, 213, 245, 0.22) 0%, transparent 60%),
+      linear-gradient(160deg, #2a1f3d 0%, #3d2a5a 50%, #1a1028 100%);
+  }
+
+  /* Dashed divider echoing the copy-card bottom */
+  .divider-dashed {
+    border-top: 1px dashed rgb(var(--accent-soft) / 0.7);
   }
 }
 
 /* View-transition handshake: crossfade on route change. */
 ::view-transition-old(root),
 ::view-transition-new(root) {
-  animation-duration: 320ms;
+  animation-duration: 360ms;
   animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
 }

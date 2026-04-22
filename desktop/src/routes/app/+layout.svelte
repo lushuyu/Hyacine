@@ -6,6 +6,7 @@
   import { t, type MsgKey } from '$lib/i18n';
   import { LayoutDashboard, FileText, List, Settings, Play, Dot } from 'lucide-svelte';
   import { fade } from 'svelte/transition';
+  import HyacineLogo from '$lib/brand/HyacineLogo.svelte';
 
   let { children } = $props();
 
@@ -24,9 +25,6 @@
     try {
       const h = await ipc.pipeline.history(1);
       const last = h.runs?.[0] as { status_ui?: string } | undefined;
-      // `status_ui` is the sidecar's normalised bucket ('ok' | 'fail' |
-      // 'pending' | 'running'). The raw DB value lives in `status`; we
-      // don't use it for the badge.
       if (!last) {
         status = 'unknown';
       } else if (last.status_ui === 'ok') {
@@ -67,20 +65,10 @@
 <div class="flex h-full bg-[rgb(var(--bg))]">
   <!-- Sidebar -->
   <aside
-    class="flex w-56 flex-col border-r border-[rgb(var(--border))] bg-[rgb(var(--bg-elev))] p-3"
+    class="flex w-56 flex-col border-r border-[rgb(var(--border))] bg-[rgb(var(--bg-chrome))] p-3"
   >
     <div class="mb-6 flex items-center gap-2 px-2 py-3">
-      <svg width="24" height="24" viewBox="0 0 64 64">
-        <defs>
-          <linearGradient id="sg" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0" stop-color="#a78bfa" />
-            <stop offset="1" stop-color="#6d28d9" />
-          </linearGradient>
-        </defs>
-        <rect width="64" height="64" rx="14" fill="url(#sg)" />
-        <path d="M18 44 V20 H26 V30 H38 V20 H46 V44 H38 V34 H26 V44 Z" fill="#fff" />
-      </svg>
-      <span class="text-sm font-semibold tracking-tight">Hyacine</span>
+      <HyacineLogo size={24} text="Hyacine" />
     </div>
 
     <nav class="flex-1 space-y-0.5">
@@ -88,21 +76,20 @@
         {@const Icon = tab.icon}
         {@const active = $page.url.pathname.startsWith(tab.path)}
         <button
-          class="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition-all hover:bg-[rgb(var(--border)/0.35)] {active
-            ? 'bg-[rgb(var(--border)/0.5)] font-medium'
-            : ''}"
+          class="flex w-full items-center gap-2.5 rounded-xl px-2.5 py-2 text-sm transition-all
+                 hover:bg-[rgb(var(--accent-soft)/0.18)]
+                 {active
+            ? 'bg-[rgb(var(--accent-soft)/0.28)] font-medium text-[rgb(var(--fg))]'
+            : 'text-[rgb(var(--fg-muted))]'}"
           onclick={() => goto(tab.path)}
         >
-          <Icon
-            size="16"
-            color={active ? 'rgb(139 92 246)' : 'rgb(var(--fg-muted))'}
-          />
+          <Icon size="16" />
           {$t(tab.labelKey)}
         </button>
       {/each}
     </nav>
 
-    <div class="border-t border-[rgb(var(--border))] pt-3 space-y-2">
+    <div class="space-y-2 border-t border-[rgb(var(--border))] pt-3">
       <button class="btn-primary w-full" disabled={running} onclick={runNow}>
         <Play size="14" />
         {running ? $t('runningNow') : $t('runNow')}
