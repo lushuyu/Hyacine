@@ -29,7 +29,16 @@
   let selectedId = $state<string>('claude-code-oauth');
   let customFormat = $state<ApiFormat>('openai_chat');
   let customBaseUrl = $state('');
-  let customModel = $state('');
+  // Single "what model does the user want" state — applies to both presets
+  // (overriding default_model) and custom endpoints. Switching presets
+  // resets it to the new preset's default unless the user has explicitly
+  // typed something.
+  let pickedModel = $state('');
+  let modelTouched = $state(false);
+  // Escape hatch from a preset's curated model dropdown to free-text
+  // entry. The `__other__` sentinel option flips this; preset swap
+  // clears it so the new preset's catalogue shows as a dropdown again.
+  let forceFreeText = $state(false);
 
   // Key entry state.
   let key = $state('');
@@ -47,6 +56,17 @@
   const selectedPreset = $derived(presets.find((p) => p.id === selectedId));
   const effectiveFormat = $derived<ApiFormat>(
     selectedId === 'custom' ? customFormat : (selectedPreset?.api_format ?? 'anthropic_cli')
+  );
+  /** Sensible fallback model when Custom has no user-chosen value —
+   *  picked per protocol so the first save never lands `sonnet` on an
+   *  OpenAI-compatible endpoint (the previous bug) or vice versa. */
+  const customDefaultModel = $derived(
+    customFormat === 'anthropic_http' ? 'claude-sonnet-4-5' : 'gpt-4o-mini'
+  );
+  const effectiveModel = $derived(
+    pickedModel ||
+      selectedPreset?.default_model ||
+      (selectedId === 'custom' ? customDefaultModel : '')
   );
 
   // Local providers (Ollama, LM Studio, a localhost base URL) don't
@@ -73,6 +93,21 @@
     selectedId === 'custom' ? 'custom' : (selectedPreset?.secret_slug ?? selectedId)
   );
 
+  // Whether to show the model picker as a dropdown (when the preset ships a
+  // curated catalogue) vs. a free-text input. Custom endpoints always get
+  // the free-text branch — we can't predict what the upstream exposes.
+  const modelOptions = $derived<string[]>(
+    selectedId === 'custom' ? [] : (selectedPreset?.models ?? [])
+  );
+  const showModelSelect = $derived(
+    modelOptions.length > 1 && !forceFreeText
+  );
+  // If the typed value drifted off the preset's catalogue, keep showing the
+  // input instead of silently snapping back when the dropdown resets.
+  const modelValueInCatalogue = $derived(
+    !pickedModel || modelOptions.includes(pickedModel)
+  );
+
   onMount(async () => {
     try {
       const res = await ipc.providers.list();
@@ -88,10 +123,24 @@
     try {
       const cur = await ipc.providers.current();
       if (cur.current?.id) selectedId = cur.current.id;
+      // Custom endpoints have no preset-level format/base_url, so we have
+      // to hydrate those from providers.current() explicitly — otherwise
+      // re-entering the wizard on a saved custom config would show the
+      // default `openai_chat` + blank base URL and, on Continue, clobber
+      // the user's saved settings with those empties.
+      if (cur.current?.id === 'custom') {
+        if (cur.current.api_format) customFormat = cur.current.api_format;
+        if (cur.current.base_url) customBaseUrl = cur.current.base_url;
+      }
+      if (cur.current?.default_model) {
+        pickedModel = cur.current.default_model;
+        modelTouched = true;
+      }
     } catch {
       /* current() also fails when the sidecar is down; keep default */
     }
     loadingPresets = false;
+    syncDefaultModel();
     await refreshExistingKey();
   });
 
@@ -111,12 +160,27 @@
     }
   }
 
+  /** Snap the model field to the newly-selected preset's default unless
+   *  the user has explicitly typed something that's still relevant. */
+  function syncDefaultModel() {
+    if (modelTouched) return;
+    pickedModel = selectedPreset?.default_model ?? '';
+  }
+
   function onPickPreset(id: string) {
     selectedId = id;
     testOk = null;
     testDetail = '';
     latencyMs = null;
+    modelTouched = false;
+    forceFreeText = false;
+    syncDefaultModel();
     refreshExistingKey();
+  }
+
+  function onModelEdit(v: string) {
+    pickedModel = v;
+    modelTouched = true;
   }
 
   function toggleShow() {
@@ -151,7 +215,7 @@
         base_url: requiresBaseUrl ? customBaseUrl : undefined,
         api_format: selectedId === 'custom' ? customFormat : undefined,
         api_key: usingStored ? undefined : key || undefined,
-        model: selectedId === 'custom' ? customModel || undefined : undefined
+        model: effectiveModel || undefined
       });
       testOk = res.status === 'ok';
       testDetail = res.detail;
@@ -177,12 +241,15 @@
         fields.llm_provider = '';
         fields.llm_api_format = customFormat;
         fields.llm_base_url = customBaseUrl;
-        if (customModel) fields.llm_model = customModel;
+        // Always persist a concrete model. Without this the yaml loader
+        // falls back to YamlConfig.llm_model = 'sonnet', which breaks
+        // OpenAI-protocol custom endpoints on the first call.
+        fields.llm_model = effectiveModel;
       } else if (selectedPreset) {
         fields.llm_provider = selectedId;
         fields.llm_api_format = '';
         fields.llm_base_url = '';
-        fields.llm_model = selectedPreset.default_model;
+        fields.llm_model = effectiveModel || selectedPreset.default_model;
       }
       await ipc.config.write(fields);
     } catch (e) {
@@ -215,7 +282,7 @@
       return acc;
     }, {})
   );
-  const categoryOrder = ['official', 'relay', 'cn_official', 'aggregator', 'local', 'custom'];
+  const categoryOrder = ['official', 'relay', 'cn_official', 'aggregator', 'local'];
   const categoryLabelKey: Record<string, Parameters<typeof $t>[0]> = {
     official: 'providerCategoryOfficial',
     relay: 'providerCategoryRelay',
@@ -230,6 +297,16 @@
     if (fmt === 'anthropic_http') return 'providerFmtAnthropicHttp';
     return 'providerFmtOpenaiChat';
   }
+
+  const headerDotColor = $derived(
+    selectedId === 'custom' ? 'rgb(var(--accent))' : (selectedPreset?.icon_color || '#94a3b8')
+  );
+  const headerName = $derived(
+    selectedId === 'custom' ? $t('providerCustom') : (selectedPreset?.name ?? '')
+  );
+  const headerDocs = $derived(
+    selectedId === 'custom' ? '' : (selectedPreset?.docs_url ?? '')
+  );
 </script>
 
 <div class="animate-fade-in space-y-6">
@@ -240,19 +317,22 @@
 
   {#if $sidecarError}
     <!-- Sidecar is down — offline catalogue only. Keep the picker usable. -->
-    <div class="card p-4 border-amber-500/40 bg-amber-50/30 dark:bg-amber-900/10 text-sm space-y-2">
+    <div
+      class="card space-y-2 border-amber-500/40 bg-amber-50/30 p-4 text-sm dark:bg-amber-900/10"
+    >
       <div class="font-medium text-amber-700 dark:text-amber-400">
         {$t('sidecarUnreachableTitle')}
       </div>
       <div class="text-xs text-[rgb(var(--fg-muted))]">
         {$t('sidecarUnreachableBody')}
       </div>
-      <div class="font-mono text-[11px] text-[rgb(var(--fg-muted))] whitespace-pre-wrap break-all">
+      <div class="whitespace-pre-wrap break-all font-mono text-[11px] text-[rgb(var(--fg-muted))]">
         {$sidecarError}
       </div>
     </div>
   {/if}
 
+  <!-- Preset grid -->
   {#if loadingPresets}
     <div class="card flex items-center gap-2 p-4 text-sm text-[rgb(var(--fg-muted))]">
       <Loader2 size="14" class="animate-spin" />
@@ -263,7 +343,9 @@
       {#each categoryOrder as cat (cat)}
         {#if grouped[cat]?.length}
           <div class="space-y-2">
-            <h2 class="text-[11px] font-semibold uppercase tracking-wider text-[rgb(var(--fg-muted))]">
+            <h2
+              class="text-[11px] font-semibold uppercase tracking-wider text-[rgb(var(--fg-muted))]"
+            >
               {$t(categoryLabelKey[cat])}
             </h2>
             <div class="grid grid-cols-2 gap-2">
@@ -290,9 +372,11 @@
         {/if}
       {/each}
 
-      <!-- Custom entry — mirrors preset button handler so test state resets. -->
+      <!-- Custom entry lives in its own section so it reads as "or bring your own". -->
       <div class="space-y-2">
-        <h2 class="text-[11px] font-semibold uppercase tracking-wider text-[rgb(var(--fg-muted))]">
+        <h2
+          class="text-[11px] font-semibold uppercase tracking-wider text-[rgb(var(--fg-muted))]"
+        >
           {$t('providerCategoryCustom')}
         </h2>
         <button
@@ -312,146 +396,137 @@
     </section>
   {/if}
 
-  <!-- Privacy notice -->
-  <div
-    class="card flex gap-3 p-4"
-    style:background-image="linear-gradient(135deg, rgba(201,184,240,0.18) 0%, rgba(232,155,180,0.10) 100%)"
+  <!-- Connection-details card — everything that configures the selected
+       row lives here so the layout is never ambiguous about "which preset
+       is this form attached to". -->
+  <section
+    class="card space-y-4 p-5"
     style:border-color="rgb(var(--accent-soft) / 0.55)"
+    style:background-image="linear-gradient(135deg, rgba(201,184,240,0.08) 0%, rgba(232,155,180,0.04) 100%)"
   >
-    <ShieldCheck size="20" class="mt-0.5 flex-shrink-0 text-[rgb(var(--accent))]" />
-    <div class="text-sm leading-relaxed">
-      <strong class="mb-1 block">{$t('providerPrivacyHeader')}</strong>
-      <p class="text-[rgb(var(--fg-muted))]">{$t('providerPrivacy')}</p>
-    </div>
-  </div>
+    <header class="space-y-1">
+      <div class="flex items-center gap-3">
+        <span
+          class="inline-block h-3 w-3 flex-shrink-0 rounded-full"
+          style:background-color={headerDotColor}
+        ></span>
+        <h2 class="flex-1 text-base font-semibold text-[rgb(var(--fg))]">
+          {$t('providerSectionActiveTitle')}
+          {#if headerName}
+            <span class="text-[rgb(var(--fg-muted))]"> · {headerName}</span>
+          {/if}
+        </h2>
+        {#if headerDocs}
+          <a
+            href={headerDocs}
+            target="_blank"
+            rel="noopener"
+            class="inline-flex items-center gap-1 text-xs text-[rgb(var(--accent))] hover:underline"
+          >
+            {$t('providerDocs')} <ExternalLink size="10" />
+          </a>
+        {/if}
+      </div>
+      {#if selectedId !== 'custom' && selectedPreset}
+        <p class="text-[11px] text-[rgb(var(--fg-muted))]">
+          {$t(kindLabelKey(selectedPreset.api_format))}{#if selectedPreset.base_url}
+            &nbsp;· <span class="font-mono">{selectedPreset.base_url}</span>
+          {/if}
+        </p>
+      {/if}
+    </header>
 
-  <!-- Custom-endpoint form -->
-  {#if selectedId === 'custom'}
-    <div class="card space-y-3 p-4">
+    <!-- Custom-only: format + base URL. Presets render these read-only in the header line. -->
+    {#if selectedId === 'custom'}
       <div class="grid grid-cols-2 gap-3">
         <label class="block">
-          <span class="mb-1 block text-xs text-[rgb(var(--fg-muted))]">{$t('providerApiFormat')}</span>
+          <span class="mb-1 block text-xs text-[rgb(var(--fg-muted))]"
+            >{$t('providerApiFormat')}</span
+          >
           <select class="input" bind:value={customFormat}>
-            <option value="anthropic_http">Anthropic HTTP (/v1/messages + x-api-key)</option>
-            <option value="openai_chat">OpenAI-compatible (/v1/chat/completions)</option>
+            <option value="anthropic_http">{$t('providerFmtAnthropicHttp')} · /v1/messages</option>
+            <option value="openai_chat">{$t('providerFmtOpenaiChat')} · /chat/completions</option>
           </select>
         </label>
         <label class="block">
-          <span class="mb-1 block text-xs text-[rgb(var(--fg-muted))]">{$t('providerModel')}</span>
-          <input class="input" bind:value={customModel} placeholder="gpt-4o-mini" />
+          <span class="mb-1 block text-xs text-[rgb(var(--fg-muted))]"
+            >{$t('providerBaseUrl')}</span
+          >
+          <input
+            class="input"
+            bind:value={customBaseUrl}
+            placeholder={customFormat === 'anthropic_http'
+              ? $t('providerCustomBaseUrlAnthropicPH')
+              : $t('providerCustomBaseUrlOpenaiPH')}
+          />
         </label>
       </div>
-      <label class="block">
-        <span class="mb-1 block text-xs text-[rgb(var(--fg-muted))]">{$t('providerBaseUrl')}</span>
-        <input
-          class="input"
-          bind:value={customBaseUrl}
-          placeholder={customFormat === 'anthropic_http'
-            ? $t('providerCustomBaseUrlAnthropicPH')
-            : $t('providerCustomBaseUrlOpenaiPH')}
-        />
-        <p class="mt-1 text-[11px] text-[rgb(var(--fg-muted))]">
-          {customFormat === 'anthropic_http'
-            ? $t('providerAnthropicHelp')
-            : $t('providerOpenaiHelp')}
-        </p>
-      </label>
-    </div>
-  {/if}
+      <p class="text-[11px] text-[rgb(var(--fg-muted))]">
+        {customFormat === 'anthropic_http'
+          ? $t('providerAnthropicHelp')
+          : $t('providerOpenaiHelp')}
+      </p>
+    {/if}
 
-  <!-- Key input — only rendered when the provider actually needs auth -->
-  {#if requiresKey}
-    {#if existingForSlug}
-      <div class="card flex items-center gap-3 p-4">
-        <Lock size="18" class="text-[rgb(var(--accent))]" />
-        <div class="flex-1">
-          <div class="text-sm font-medium">{$t('providerKeyStored')}</div>
-          <div class="text-xs text-[rgb(var(--fg-muted))]">{$t('providerKeyStoredNote')} {slug}</div>
-        </div>
-        <button class="btn-ghost !text-xs" onclick={clearStoredKey}>{$t('providerReplace')}</button>
-      </div>
-    {:else}
-      <label class="block space-y-1.5">
-        <span class="block text-xs font-semibold text-[rgb(var(--fg-muted))]">
-          {$t('providerKeyLabel')}
-        </span>
-        <div class="relative">
-          {#if showKey}
-            <input
-              class="input pr-20 font-mono text-xs"
-              type="text"
-              bind:value={key}
-              autocomplete="off"
-              spellcheck="false"
-              placeholder="sk-…"
-            />
-          {:else}
-            <input
-              class="input pr-20 font-mono text-xs"
-              type="password"
-              bind:value={key}
-              autocomplete="off"
-              spellcheck="false"
-              placeholder="sk-…"
-            />
-          {/if}
-          <button
-            type="button"
-            class="absolute inset-y-0 right-2 my-auto h-7 px-2 rounded text-[rgb(var(--fg-muted))] hover:text-[rgb(var(--fg))]"
-            onclick={toggleShow}
-            aria-label={showKey ? 'Hide key' : 'Show key'}
-          >
-            {#if showKey}<EyeOff size="14" />{:else}<Eye size="14" />{/if}
+    <!-- Model — dropdown when the preset ships a catalogue, else free-text.
+         Either way `pickedModel` holds the authoritative value. -->
+    <label class="block">
+      <span class="mb-1 block text-xs text-[rgb(var(--fg-muted))]">{$t('providerModel')}</span>
+      {#if showModelSelect && modelValueInCatalogue}
+        <select
+          class="input"
+          value={pickedModel || modelOptions[0]}
+          onchange={(e) => {
+            const v = (e.currentTarget as HTMLSelectElement).value;
+            if (v === '__other__') {
+              // Switch to free-text entry and clear so the input is empty
+              // and immediately focusable. The sentinel is never persisted
+              // — effectiveModel falls through to pickedModel (typed) or a
+              // protocol-appropriate default.
+              forceFreeText = true;
+              onModelEdit('');
+            } else {
+              onModelEdit(v);
+            }
+          }}
+        >
+          {#each modelOptions as m (m)}
+            <option value={m}>{m}</option>
+          {/each}
+          <option value="__other__">{$t('providerModelOther')}</option>
+        </select>
+      {:else}
+        <input
+          class="input font-mono text-xs"
+          value={pickedModel}
+          placeholder={selectedPreset?.default_model ?? customDefaultModel}
+          oninput={(e) => onModelEdit((e.currentTarget as HTMLInputElement).value)}
+        />
+      {/if}
+      <p class="mt-1 text-[11px] text-[rgb(var(--fg-muted))]">{$t('providerModelHint')}</p>
+    </label>
+
+    <!-- Key / auth section — branches on format and whether a key is already stored. -->
+    {#if requiresKey}
+      {#if existingForSlug}
+        <div
+          class="flex items-center gap-3 rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--bg-elev))] p-3"
+        >
+          <Lock size="18" class="text-[rgb(var(--accent))]" />
+          <div class="flex-1">
+            <div class="text-sm font-medium">{$t('providerKeyStored')}</div>
+            <div class="text-xs text-[rgb(var(--fg-muted))]">
+              {$t('providerKeyStoredNote')} {slug}
+            </div>
+          </div>
+          <button class="btn-ghost !text-xs" onclick={clearStoredKey}>
+            {$t('providerReplace')}
           </button>
         </div>
-        {#if key && !validity.ok}
-          <p class="text-xs text-red-500">{validity.reason}</p>
-        {:else if key && validity.ok}
-          <p class="text-xs text-[rgb(var(--fg-muted))]">{$t('providerKeyLooksGood')} {maskKey(key)}</p>
-        {/if}
-      </label>
-    {/if}
-  {:else if effectiveFormat === 'anthropic_cli'}
-    {#if existingForSlug}
-      <div class="card flex items-center gap-3 p-4">
-        <Lock size="18" class="text-[rgb(var(--accent))]" />
-        <div class="flex-1">
-          <div class="text-sm font-medium">{$t('providerKeyStored')}</div>
-          <div class="text-xs text-[rgb(var(--fg-muted))]">{$t('providerKeyStoredNote')} {slug}</div>
-        </div>
-        <button class="btn-ghost !text-xs" onclick={clearStoredKey}>{$t('providerReplace')}</button>
-      </div>
-    {:else}
-      <div class="card space-y-3 p-4 text-sm">
-        <div class="flex items-start gap-3">
-          <Sparkles size="16" class="mt-0.5 flex-shrink-0 text-[rgb(var(--accent))]" />
-          <div class="flex-1 space-y-1">
-            <div class="font-medium">
-              {$t('providerCliHeader')}
-              <code class="rounded bg-[rgb(var(--border)/0.4)] px-1.5 py-0.5 font-mono text-[11px]">claude</code>
-              CLI
-            </div>
-            <p class="text-[rgb(var(--fg-muted))]">{$t('providerCliBody')}</p>
-            <p class="text-[rgb(var(--fg-muted))]">
-              <code class="rounded bg-[rgb(var(--border)/0.4)] px-1.5 py-0.5 font-mono text-[11px]">{$t('providerCliSetupCmd')}</code>
-            </p>
-            {#if selectedPreset?.docs_url}
-              <a
-                href={selectedPreset.docs_url}
-                target="_blank"
-                rel="noopener"
-                class="inline-flex items-center gap-1 text-xs text-[rgb(var(--accent))] hover:underline"
-              >
-                {$t('providerDocs')} <ExternalLink size="10" />
-              </a>
-            {/if}
-          </div>
-        </div>
-
-        <!-- Optional paste field. Empty = rely on `claude login` creds. -->
-        <label class="block space-y-1.5 pt-1">
+      {:else}
+        <label class="block space-y-1.5">
           <span class="block text-xs font-semibold text-[rgb(var(--fg-muted))]">
-            {$t('providerCliPasteOptional')}
+            {$t('providerKeyLabel')}
           </span>
           <div class="relative">
             {#if showKey}
@@ -461,7 +536,7 @@
                 bind:value={key}
                 autocomplete="off"
                 spellcheck="false"
-                placeholder="sk-ant-oat01-…"
+                placeholder="sk-…"
               />
             {:else}
               <input
@@ -470,7 +545,7 @@
                 bind:value={key}
                 autocomplete="off"
                 spellcheck="false"
-                placeholder="sk-ant-oat01-…"
+                placeholder="sk-…"
               />
             {/if}
             <button
@@ -482,7 +557,6 @@
               {#if showKey}<EyeOff size="14" />{:else}<Eye size="14" />{/if}
             </button>
           </div>
-          <p class="text-[11px] text-[rgb(var(--fg-muted))]">{$t('providerCliPasteHint')}</p>
           {#if key && !validity.ok}
             <p class="text-xs text-red-500">{validity.reason}</p>
           {:else if key && validity.ok}
@@ -491,43 +565,137 @@
             </p>
           {/if}
         </label>
+      {/if}
+    {:else if effectiveFormat === 'anthropic_cli'}
+      {#if existingForSlug}
+        <div
+          class="flex items-center gap-3 rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--bg-elev))] p-3"
+        >
+          <Lock size="18" class="text-[rgb(var(--accent))]" />
+          <div class="flex-1">
+            <div class="text-sm font-medium">{$t('providerKeyStored')}</div>
+            <div class="text-xs text-[rgb(var(--fg-muted))]">
+              {$t('providerKeyStoredNote')} {slug}
+            </div>
+          </div>
+          <button class="btn-ghost !text-xs" onclick={clearStoredKey}>
+            {$t('providerReplace')}
+          </button>
+        </div>
+      {:else}
+        <div class="space-y-3 rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--bg-elev))] p-3 text-sm">
+          <div class="flex items-start gap-3">
+            <Sparkles size="16" class="mt-0.5 flex-shrink-0 text-[rgb(var(--accent))]" />
+            <div class="flex-1 space-y-1">
+              <div class="font-medium">
+                {$t('providerCliHeader')}
+                <code
+                  class="rounded bg-[rgb(var(--border)/0.4)] px-1.5 py-0.5 font-mono text-[11px]"
+                  >claude</code
+                >
+                CLI
+              </div>
+              <p class="text-[rgb(var(--fg-muted))]">{$t('providerCliBody')}</p>
+              <p class="text-[rgb(var(--fg-muted))]">
+                <code
+                  class="rounded bg-[rgb(var(--border)/0.4)] px-1.5 py-0.5 font-mono text-[11px]"
+                  >{$t('providerCliSetupCmd')}</code
+                >
+              </p>
+            </div>
+          </div>
+
+          <!-- Optional paste field. Empty = rely on `claude login` creds. -->
+          <label class="block space-y-1.5 pt-1">
+            <span class="block text-xs font-semibold text-[rgb(var(--fg-muted))]">
+              {$t('providerCliPasteOptional')}
+            </span>
+            <div class="relative">
+              {#if showKey}
+                <input
+                  class="input pr-20 font-mono text-xs"
+                  type="text"
+                  bind:value={key}
+                  autocomplete="off"
+                  spellcheck="false"
+                  placeholder="sk-ant-oat01-…"
+                />
+              {:else}
+                <input
+                  class="input pr-20 font-mono text-xs"
+                  type="password"
+                  bind:value={key}
+                  autocomplete="off"
+                  spellcheck="false"
+                  placeholder="sk-ant-oat01-…"
+                />
+              {/if}
+              <button
+                type="button"
+                class="absolute inset-y-0 right-2 my-auto h-7 rounded px-2 text-[rgb(var(--fg-muted))] hover:text-[rgb(var(--fg))]"
+                onclick={toggleShow}
+                aria-label={showKey ? 'Hide key' : 'Show key'}
+              >
+                {#if showKey}<EyeOff size="14" />{:else}<Eye size="14" />{/if}
+              </button>
+            </div>
+            <p class="text-[11px] text-[rgb(var(--fg-muted))]">{$t('providerCliPasteHint')}</p>
+            {#if key && !validity.ok}
+              <p class="text-xs text-red-500">{validity.reason}</p>
+            {:else if key && validity.ok}
+              <p class="text-xs text-[rgb(var(--fg-muted))]">
+                {$t('providerKeyLooksGood')} {maskKey(key)}
+              </p>
+            {/if}
+          </label>
+        </div>
+      {/if}
+    {/if}
+
+    <!-- Test row lives inside the details card so the verdict sits next to
+         the inputs that produced it. -->
+    <div class="flex items-center gap-3 border-t border-[rgb(var(--border))] pt-3">
+      <button
+        class="btn-secondary"
+        disabled={testing ||
+          (requiresKey && !existingForSlug && !validity.ok) ||
+          keyEnteredButInvalid ||
+          (requiresBaseUrl && !customBaseUrl)}
+        onclick={runTest}
+      >
+        {#if testing}
+          <Loader2 size="14" class="animate-spin" /> {$t('testing')}
+        {:else}
+          {$t('providerTest')}
+        {/if}
+      </button>
+      {#if testOk === true}
+        <span class="inline-flex items-center gap-1.5 text-sm text-green-600 dark:text-green-400">
+          <Check size="14" />
+          {$t('providerOk')}{latencyMs ? ` · ${latencyMs}ms` : ''}
+        </span>
+      {:else if testOk === false}
+        <span class="inline-flex items-center gap-1.5 text-sm text-red-500">
+          <AlertTriangle size="14" />
+          {$t('providerBad')}
+        </span>
+      {/if}
+    </div>
+    {#if testOk === false && testDetail}
+      <div class="whitespace-pre-wrap rounded-lg border border-red-500/20 bg-red-500/5 p-3 font-mono text-xs text-[rgb(var(--fg-muted))]">
+        {testDetail}
       </div>
     {/if}
-  {/if}
+  </section>
 
-  <!-- Test row -->
-  <div class="flex items-center gap-3">
-    <button
-      class="btn-secondary"
-      disabled={testing ||
-        (requiresKey && !existingForSlug && !validity.ok) ||
-        keyEnteredButInvalid ||
-        (requiresBaseUrl && !customBaseUrl)}
-      onclick={runTest}
-    >
-      {#if testing}
-        <Loader2 size="14" class="animate-spin" /> {$t('testing')}
-      {:else}
-        {$t('providerTest')}
-      {/if}
-    </button>
-    {#if testOk === true}
-      <span class="inline-flex items-center gap-1.5 text-sm text-green-600 dark:text-green-400">
-        <Check size="14" />
-        {$t('providerOk')}{latencyMs ? ` · ${latencyMs}ms` : ''}
-      </span>
-    {:else if testOk === false}
-      <span class="inline-flex items-center gap-1.5 text-sm text-red-500">
-        <AlertTriangle size="14" />
-        {$t('providerBad')}
-      </span>
-    {/if}
-  </div>
-  {#if testOk === false && testDetail}
-    <div class="card p-3 text-xs font-mono text-[rgb(var(--fg-muted))] whitespace-pre-wrap">
-      {testDetail}
+  <!-- Privacy notice stays as a low-stakes reassurance below the form. -->
+  <div class="card flex gap-3 p-4">
+    <ShieldCheck size="20" class="mt-0.5 flex-shrink-0 text-[rgb(var(--accent))]" />
+    <div class="text-sm leading-relaxed">
+      <strong class="mb-1 block">{$t('providerPrivacyHeader')}</strong>
+      <p class="text-[rgb(var(--fg-muted))]">{$t('providerPrivacy')}</p>
     </div>
-  {/if}
+  </div>
 
   <div class="flex justify-end pt-2">
     <button

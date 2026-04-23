@@ -49,6 +49,58 @@ The dev loop spawns `python3 -m hyacine.ipc` as a sidecar fallback so you can
 iterate without rebuilding the Python binary. For release builds, a bundled
 standalone Python binary is expected at `src-tauri/binaries/hyacine-ipc<EXT>`.
 
+### Developing inside WSL 2
+
+`npm run tauri:dev` works natively on WSL 2 as long as WSLg is available
+(Windows 11, or Windows 10 with the latest WSL release). No X server
+forwarding needed — the Tauri webview pops out of `wslg.exe` like any
+other Linux GUI.
+
+One-off setup on a fresh Ubuntu/Debian WSL image:
+
+```bash
+# Tauri's Linux deps — matches https://v2.tauri.app/start/prerequisites/
+sudo apt update
+sudo apt install -y \
+  libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev libsoup-3.0-dev \
+  build-essential curl wget file pkg-config libssl-dev \
+  libglib2.0-dev libgtk-3-dev libayatana-appindicator3-dev \
+  librsvg2-dev
+
+# Node (via your favourite version manager) + Rust (rustup) + uv (Python)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Python side — run from the repo root
+uv sync
+
+# Desktop side
+cd desktop
+npm install
+npm run tauri:dev
+```
+
+If WSLg is unavailable (e.g. WSL 1, or a host where `DISPLAY` is
+unset), you can still iterate on the UI by running Vite alone:
+
+```bash
+cd desktop
+npm run dev     # http://localhost:5173 in any Windows browser
+```
+
+In UI-only mode the Tauri `invoke` bridge isn't present in the
+browser, so anything that goes through `$lib/ipc` (secrets, sidecar
+RPC, connectivity probes) will reject visibly — you'll see a "sidecar
+unreachable" banner and any action that needs Tauri surfaces a toast
+error. Wizard pages that purely render still work. For anything that
+actually talks to the sidecar, you need the Tauri shell, which means
+WSLg (or running natively).
+
+Debugging the Python sidecar directly is also easy in WSL — the
+sidecar is just a stdio JSON-RPC process, so `python3 -m hyacine.ipc`
+in one shell lets you drive it by hand while poking at
+`src/hyacine/ipc/handlers/*`.
+
 ## Building a release
 
 ```bash

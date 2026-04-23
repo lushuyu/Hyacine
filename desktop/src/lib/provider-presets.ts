@@ -81,7 +81,7 @@ export const FALLBACK_PRESETS: ProviderPreset[] = [
     category: 'official',
     api_format: 'openai_chat',
     base_url: 'https://api.openai.com/v1',
-    default_model: 'gpt-4.1-mini',
+    default_model: 'gpt-4.1',
     secret_slug: 'openai',
     docs_url: 'https://platform.openai.com/api-keys',
     icon_color: '#10b981',
@@ -99,7 +99,12 @@ export const FALLBACK_PRESETS: ProviderPreset[] = [
     docs_url: 'https://console.groq.com/keys',
     icon_color: '#f97316',
     notes: '',
-    models: []
+    models: [
+      'llama-3.3-70b-versatile',
+      'llama-3.1-8b-instant',
+      'mixtral-8x7b-32768',
+      'gemma2-9b-it'
+    ]
   },
   {
     id: 'ollama-local',
