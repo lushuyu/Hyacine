@@ -10,8 +10,18 @@ first hyacine report. Budget around 20 minutes.
 - [`uv`](https://docs.astral.sh/uv/) on `PATH`.
 - A Microsoft 365 account with an Outlook mailbox you can sign into from a
   browser (any tenant — personal `@outlook.com` or organizational).
-- Claude Code installed and logged in via `claude setup-token`. You will paste
-  the resulting token into the wizard.
+- Credentials for the LLM you want to use.
+  - **Default — Claude Code OAuth** (what `python -m hyacine init` asks for).
+    Install Claude Code and run `claude setup-token`; paste the token into
+    the wizard.
+  - **Other providers** (OpenAI, DeepSeek, Kimi, Groq, Anthropic Console,
+    Ollama, any custom `anthropic_http` / `openai_chat` endpoint): skip
+    the OAuth prompt with `--no-prompt-token`, finish the wizard, then
+    point `llm_provider` / `llm_api_format` / `llm_base_url` at your
+    provider by editing `config/config.yaml` — or use the desktop app's
+    wizard, which has a dedicated provider picker. See the
+    [desktop README](../desktop/README.md#llm-providers) for the preset
+    catalogue and credential slots.
 - Optional: accounts at `ntfy.sh` and `healthchecks.io` for out-of-band failure
   alerts. Both can be left blank at first and added later.
 

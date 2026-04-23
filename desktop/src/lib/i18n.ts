@@ -17,7 +17,7 @@ const messages = {
   en: {
     // ── Brand / chrome ───────────────────────────────────────────────
     appName: 'Hyacine',
-    tagline: 'Your personal Outlook daily report — powered by Claude.',
+    tagline: 'Your personal Outlook daily report — powered by {provider}.',
 
     // ── Common verbs ─────────────────────────────────────────────────
     continue: 'Continue',
@@ -54,14 +54,14 @@ const messages = {
 
     // ── Identity step ────────────────────────────────────────────────
     identity: 'Who are you?',
-    identityHint: 'Claude uses this to tone the briefing. It stays on your machine.',
+    identityHint: '{provider} uses this to tone the briefing. It stays on your machine.',
     identityName: 'Name',
     identityRole: 'Role',
-    identityBlurb: 'Tell Claude about your work (what matters most, who to watch for)',
+    identityBlurb: 'Tell {provider} about your work (what matters most, who to watch for)',
     identityPreview: 'Preview',
     identityPreviewName: 'Your name',
     identityPreviewRole: 'Your role',
-    identityPreviewBlurb: 'A short description Claude can use to tone the briefing.',
+    identityPreviewBlurb: 'A short description {provider} can use to tone the briefing.',
 
     // ── Priorities step ──────────────────────────────────────────────
     priorities: 'What should always rise to the top?',
@@ -148,12 +148,14 @@ const messages = {
     graphSignedIn: 'Signed in',
     graphCancelled: 'Cancelled',
     graphFailed: 'Sign-in failed',
+    graphManualOpenHint: "Can't open a browser automatically? Copy the URL above and visit it manually.",
+    graphOpenBrowserError: "Can't open browser: {error}. Copy the URL and open it manually.",
 
     // ── Connectivity step ────────────────────────────────────────────
     connectivityTitle: 'Running connectivity checks',
     connectivitySubtitle: 'Four checks in parallel — they should finish in a few seconds.',
     connectivityDns: 'DNS + outbound TCP',
-    connectivityClaude: 'Anthropic API',
+    connectivityClaude: '{provider} API',
     connectivityGraph: 'Microsoft Graph',
     connectivitySendmail: 'SendMail (test to self)',
     connectivityIncludeSendmail: 'Also send a one-time test email to myself',
@@ -167,13 +169,13 @@ const messages = {
     // ── Preview step ─────────────────────────────────────────────────
     previewTitle: 'First run preview',
     previewSubtitle:
-      "We'll run the full pipeline once without sending an email, so you can see what Claude produces.",
+      "We'll run the full pipeline once without sending an email, so you can see what {provider} produces.",
     previewRun: 'Run again',
     previewHeader: 'Rendered preview',
     previewSubject: 'Subject',
     previewStageFetch: 'Fetch inbox & calendar',
     previewStageClassify: 'Classify messages',
-    previewStageLlm: 'Invoke Claude',
+    previewStageLlm: 'Invoke {provider}',
     previewStageRender: 'Render HTML',
     previewStageDeliver: 'Deliver (dry run)',
 
@@ -211,14 +213,14 @@ const messages = {
 
     // ── Prompt Lab ───────────────────────────────────────────────────
     promptTitle: 'Prompt Lab',
-    promptSubtitle: 'This is the system prompt Claude sees on every run.',
+    promptSubtitle: 'This is the system prompt {provider} sees on every run.',
     promptDryRun: 'Dry-run',
     promptSaved: 'Prompt saved',
     promptDryRunSucceeded: 'Dry run succeeded in',
 
     // ── Rules ────────────────────────────────────────────────────────
     rulesTitle: 'Rules',
-    rulesSubtitle: 'YAML classifier rules — promote/demote messages before they reach Claude.',
+    rulesSubtitle: 'YAML classifier rules — promote/demote messages before they reach {provider}.',
     rulesSaved: 'Rules saved',
 
     // ── Settings ─────────────────────────────────────────────────────
@@ -232,7 +234,7 @@ const messages = {
     settingsTimezone: 'Timezone',
     settingsRunTime: 'Run time',
     settingsLanguage: 'Language',
-    settingsClaudeModel: 'Claude model',
+    settingsClaudeModel: '{provider} model',
     settingsLlmProvider: 'LLM provider',
     settingsKeyStoredFor: 'Key stored for',
     settingsKeyNotStored: 'No key stored for this provider',
@@ -249,7 +251,7 @@ const messages = {
   },
   'zh-CN': {
     appName: 'Hyacine',
-    tagline: '你的 Outlook 每日摘要 —— 由 Claude 生成',
+    tagline: '你的 Outlook 每日摘要 —— 由 {provider} 生成',
 
     continue: '继续',
     back: '上一步',
@@ -282,14 +284,14 @@ const messages = {
     language: '语言',
 
     identity: '你是谁？',
-    identityHint: 'Claude 会用这些信息调整摘要的语气。仅保存在本机。',
+    identityHint: '{provider} 会用这些信息调整摘要的语气。仅保存在本机。',
     identityName: '姓名',
     identityRole: '职位',
-    identityBlurb: '告诉 Claude 你的工作（最关心什么、关注哪些人）',
+    identityBlurb: '告诉 {provider} 你的工作（最关心什么、关注哪些人）',
     identityPreview: '预览',
     identityPreviewName: '你的姓名',
     identityPreviewRole: '你的职位',
-    identityPreviewBlurb: '一段简短描述，Claude 会用它来调整摘要语气。',
+    identityPreviewBlurb: '一段简短描述，{provider} 会用它来调整摘要语气。',
 
     priorities: '哪些信息应该优先置顶？',
     prioritiesHint: '添加标签 —— 命中这些规则的邮件将被推到「今日必做」。',
@@ -368,11 +370,13 @@ const messages = {
     graphSignedIn: '已登录',
     graphCancelled: '已取消',
     graphFailed: '登录失败',
+    graphManualOpenHint: '无法自动打开浏览器时，复制上方 URL 手动访问。',
+    graphOpenBrowserError: '无法打开浏览器：{error}。请复制 URL 手动访问。',
 
     connectivityTitle: '正在检查连通性',
     connectivitySubtitle: '四项并行检查，几秒内完成。',
     connectivityDns: 'DNS + 出站 TCP',
-    connectivityClaude: 'Anthropic API',
+    connectivityClaude: '{provider} API',
     connectivityGraph: 'Microsoft Graph',
     connectivitySendmail: 'SendMail（给自己发测试邮件）',
     connectivityIncludeSendmail: '同时给自己发一封一次性测试邮件',
@@ -384,13 +388,13 @@ const messages = {
     connectivityStatusNotRunning: '未运行（可选项）',
 
     previewTitle: '首次运行预览',
-    previewSubtitle: '完整跑一遍流程但不实际发送邮件，让你看到 Claude 的产出。',
+    previewSubtitle: '完整跑一遍流程但不实际发送邮件，让你看到 {provider} 的产出。',
     previewRun: '再运行一次',
     previewHeader: '渲染预览',
     previewSubject: '主题',
     previewStageFetch: '拉取邮件和日程',
     previewStageClassify: '邮件分类',
-    previewStageLlm: '调用 Claude',
+    previewStageLlm: '调用 {provider}',
     previewStageRender: '渲染 HTML',
     previewStageDeliver: '投递（dry run）',
 
@@ -424,13 +428,13 @@ const messages = {
     dashboardNoRuns: '还没有运行记录 —— 点侧边栏的「立即运行」来跑第一次。',
 
     promptTitle: 'Prompt 实验室',
-    promptSubtitle: '这是 Claude 每次运行都会看到的系统 prompt。',
+    promptSubtitle: '这是 {provider} 每次运行都会看到的系统 prompt。',
     promptDryRun: '预览运行',
     promptSaved: 'Prompt 已保存',
     promptDryRunSucceeded: '预览运行成功，耗时',
 
     rulesTitle: '规则',
-    rulesSubtitle: 'YAML 分类规则 —— 在邮件进入 Claude 前做优先级调整。',
+    rulesSubtitle: 'YAML 分类规则 —— 在邮件进入 {provider} 前做优先级调整。',
     rulesSaved: '规则已保存',
 
     settingsTitle: '设置',
@@ -443,7 +447,7 @@ const messages = {
     settingsTimezone: '时区',
     settingsRunTime: '运行时间',
     settingsLanguage: '语言',
-    settingsClaudeModel: 'Claude 模型',
+    settingsClaudeModel: '{provider} 模型',
     settingsLlmProvider: 'LLM 供应商',
     settingsKeyStoredFor: '已为此 slug 保存密钥：',
     settingsKeyNotStored: '此供应商暂无保存密钥',
@@ -463,8 +467,31 @@ type Dict = typeof messages.en;
 export type MsgKey = keyof Dict;
 
 export const lang = writable<Lang>('en');
-export const t = derived(lang, ($l) => (k: MsgKey) => messages[$l][k] ?? messages.en[k]);
 
-export function tn(k: MsgKey): string {
-  return messages[get(lang)][k] ?? messages.en[k];
+// Display name of the LLM the pipeline is actually configured to use.
+// Populated by the root layout from `providers.current`; message strings
+// reference it via the `{provider}` placeholder so the UI reads
+// "Invoke DeepSeek" / "调用 Groq" / etc. instead of being hard-coded to
+// "Claude". Default keeps something sensible before the sidecar responds.
+export const providerName = writable<string>('LLM');
+
+function interpolate(raw: string, vars: Record<string, string | number>): string {
+  return raw.replace(/\{(\w+)\}/g, (_m, key) => {
+    const v = vars[key];
+    return v === undefined ? `{${key}}` : String(v);
+  });
+}
+
+export const t = derived(
+  [lang, providerName],
+  ([$l, $p]) =>
+    (k: MsgKey, vars?: Record<string, string | number>) => {
+      const raw = messages[$l][k] ?? messages.en[k];
+      return interpolate(raw, { provider: $p, ...(vars ?? {}) });
+    }
+);
+
+export function tn(k: MsgKey, vars?: Record<string, string | number>): string {
+  const raw = messages[get(lang)][k] ?? messages.en[k];
+  return interpolate(raw, { provider: get(providerName), ...(vars ?? {}) });
 }

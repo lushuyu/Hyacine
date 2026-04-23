@@ -304,8 +304,13 @@ async fn handle_frame(app: &AppHandle, pending: &Pending, line: &str) {
     }
 
     // Notification/event.
+    //
+    // Tauri 2's `listen` command rejects event names with `.` (allowed set:
+    // alphanumeric, `-`, `/`, `:`, `_`). JSON-RPC methods are `area.verb`,
+    // so we translate `.` → `/` on the way out: `graph.device_flow` becomes
+    // `rpc:graph/device_flow`. Frontend subscriptions use the slash form.
     if let Some(method) = v.get("method").and_then(|m| m.as_str()) {
-        let evt_name = format!("rpc:{method}");
+        let evt_name = format!("rpc:{}", method.replace('.', "/"));
         let payload = v.get("params").cloned().unwrap_or(Value::Null);
         let _ = app.emit(&evt_name, payload);
     }

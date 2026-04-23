@@ -73,7 +73,9 @@ def dry_run(
     """Dry run: walk every stage but don't actually send the email.
 
     Returns the rendered body so the wizard can preview the email in its
-    sandboxed iframe.
+    sandboxed iframe. ``run_pipeline(dry_run=True)`` is the authoritative
+    gate — sendMail is never called on this path, and the watermark isn't
+    advanced.
     """
     started = time.time()
     _inject_claude_code_oauth()
@@ -83,25 +85,20 @@ def dry_run(
     except ImportError:
         return _mock_dry_run(emit, started)
 
-    # Drive the progress UI as best we can without piping real events out of
-    # the pipeline (we can't without patching run_pipeline upstream). We mark
-    # each stage started in order, then rely on the final record to decide
-    # whether everything succeeded.
-    for stage in _STAGES[:-1]:
-        _emit_stage(emit, stage, "running")
-    _emit_stage(emit, "deliver", "running", note="dry-run — will not actually send")
+    # Event-driven stage UI — `run_pipeline` invokes this callback at each
+    # real boundary (running → ok/fail) so the wizard animates in lockstep
+    # with the actual work instead of ticking everything at once at the end.
+    def progress(stage: str, status: str) -> None:
+        _emit_stage(emit, stage, status)
 
     try:
         with _silence_stdout():
-            record = run_pipeline()
+            record = run_pipeline(dry_run=True, progress=progress)
     except Exception as e:  # noqa: BLE001
         log("error", "dry-run-failed", trace=traceback.format_exc())
         for stage in _STAGES:
             _emit_stage(emit, stage, "fail")
         return {"ok": False, "error": str(e), "duration_ms": int((time.time() - started) * 1000)}
-
-    for stage in _STAGES:
-        _emit_stage(emit, stage, "ok")
 
     markdown = getattr(record, "markdown", "") or ""
     return {
@@ -128,12 +125,12 @@ def run(
     except ImportError as e:
         return {"ok": False, "error": str(e), "duration_ms": 0}
 
-    for stage in _STAGES:
-        _emit_stage(emit, stage, "running")
+    def progress(stage: str, status: str) -> None:
+        _emit_stage(emit, stage, status)
 
     try:
         with _silence_stdout():
-            record = run_pipeline()
+            record = run_pipeline(progress=progress)
     except Exception as e:  # noqa: BLE001
         log("error", "run-failed", trace=traceback.format_exc())
         for stage in _STAGES:
@@ -142,8 +139,6 @@ def run(
 
     status = str(getattr(record, "status", "")).lower()
     ok = status.endswith("success")
-    for stage in _STAGES:
-        _emit_stage(emit, stage, "ok" if ok else "fail")
 
     return {
         "ok": ok,

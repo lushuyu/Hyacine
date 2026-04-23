@@ -53,7 +53,7 @@
       result = await ipc.pipeline.dryRun();
       done = !!result?.ok;
 
-      // Only overwrite stages the `rpc:pipeline.progress` stream hasn't
+      // Only overwrite stages the `rpc:pipeline/progress` stream hasn't
       // already marked — the event-driven updates are authoritative. For
       // any stage still in 'pending'/'running' when the RPC returns, take
       // its terminal colour from `result.ok` so we never claim success on
@@ -82,7 +82,7 @@
   }
 
   onMount(async () => {
-    unsub = await ipc.onEvent<PipelineProgress>('rpc:pipeline.progress', (e) => {
+    unsub = await ipc.onEvent<PipelineProgress>('rpc:pipeline/progress', (e) => {
       status[e.stage] = e.status;
     });
     await runPreview();

@@ -285,9 +285,10 @@ jobs:
           retention-days: 14
 
   # ──────────────────────────────────────────────────────────────────────
-  # Pre-release publish. Takes whatever installers the desktop matrix
-  # managed to produce and ships them as a GitHub Release marked
-  # `prerelease: true`.
+  # Release publish. Takes whatever installers the desktop matrix
+  # produced and ships them as a GitHub Release. The release channel
+  # (stable / pre-release / nightly) is decided by `Compute release
+  # metadata` below; see that step for the full matrix.
   #
   # Partial matrix is OK. `always()` + `python.result == 'success'` lets
   # us publish when e.g. one platform's tauri-bundler has a transient
@@ -296,20 +297,18 @@ jobs:
   # one can be rerun at leisure. If ZERO cells succeed we bail loudly so
   # the job doesn't quietly publish an empty release.
   #
-  # Tag selection:
-  # - refs/tags/v*        → use the tag verbatim; this is how a real
-  #                          release cut happens (`git tag v1.2.3 && git push`).
-  # - refs/heads/main     → rolling `nightly` release; each main push
-  #                          replaces the prior one so users always grab
-  #                          "latest built from main".
-  # - any other ref       → skip (PRs, feature branches).
+  # Ref selection:
+  # - refs/tags/vX.Y.Z       → stable release, becomes repo "Latest".
+  # - refs/tags/vX.Y.Z-…     → pre-release (rc/beta/+build), not Latest.
+  # - refs/heads/main        → nightly (`nightly-<version>`), not Latest.
+  # - any other ref          → skip (PRs, feature branches).
   #
-  # The release is always prerelease=true so the latest-tag promotion on
-  # GitHub's UI is a deliberate, human action — never an accident of a
-  # nightly push.
+  # Only a bare `vX.Y.Z` tag flips the GitHub "Latest" bit — nightlies
+  # and tagged pre-releases are published visibly but never promote past
+  # the stable cut a human made.
   # ──────────────────────────────────────────────────────────────────────
   prerelease:
-    name: Publish pre-release
+    name: Publish release
     needs: [python, desktop]
     # `always()` bypasses the default "skip if any needed job failed"
     # behaviour so a single flaky matrix cell doesn't block the nightly
@@ -360,51 +359,71 @@ jobs:
         # Mirrors the "Stamp build version" step in the desktop job so the
         # release tag matches the version embedded inside the installer.
         #
-        # - refs/tags/v*   → use the tag verbatim, e.g. `v1.2.3`.
-        # - refs/heads/main → derive `major.minor.<run_number>` from
-        #                     tauri.conf.json + GITHUB_RUN_NUMBER, then tag
-        #                     `nightly-<version>`. GITHUB_RUN_NUMBER climbs
-        #                     with every workflow run so each nightly gets a
-        #                     unique tag — no need to delete the prior tag,
-        #                     no race against the upload step.
+        # Three channels, in priority order:
+        #
+        # - `refs/tags/vX.Y.Z` (pure semver, no suffix) → stable release,
+        #   becomes the repo's "Latest" on GitHub's UI. Manual action
+        #   (someone has to `git tag v1.2.3 && git push`).
+        # - `refs/tags/v*-anything` (rc / beta / alpha / +build) → tagged
+        #   pre-release. Published but NOT Latest.
+        # - `refs/heads/main` → nightly. `major.minor.<run_number>` tagged
+        #   `nightly-<version>`; always pre-release, never Latest. Each run
+        #   gets a unique tag so upload is race-free.
         shell: bash
         run: |
           set -euo pipefail
           short_sha="${GITHUB_SHA:0:7}"
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+          if [[ "${GITHUB_REF}" =~ ^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            # Stable tag — vX.Y.Z exactly, no suffix.
             version="${GITHUB_REF#refs/tags/v}"
             tag="v${version}"
             title="Hyacine ${tag}"
+            prerelease=false
+            make_latest=true
+          elif [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            # Tagged pre-release (rc, beta, +build, etc.) — ship it but
+            # don't promote to Latest.
+            version="${GITHUB_REF#refs/tags/v}"
+            tag="v${version}"
+            title="Hyacine ${tag} (pre-release)"
+            prerelease=true
+            make_latest=false
           else
+            # Nightly from main.
             major=$(jq -r .version desktop/src-tauri/tauri.conf.json | cut -d. -f1)
             minor=$(jq -r .version desktop/src-tauri/tauri.conf.json | cut -d. -f2)
             version="${major}.${minor}.${GITHUB_RUN_NUMBER:-0}"
             tag="nightly-${version}"
             title="Nightly ${version} (main @ ${short_sha})"
+            prerelease=true
+            make_latest=false
           fi
           {
             echo "tag=${tag}"
             echo "title=${title}"
             echo "version=${version}"
             echo "short_sha=${short_sha}"
+            echo "prerelease=${prerelease}"
+            echo "make_latest=${make_latest}"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Publish pre-release
+      - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
           name: ${{ steps.meta.outputs.title }}
-          prerelease: true
-          # Never mark a pre-release as "Latest" on the repo homepage —
-          # that bit should only flip when a human promotes a real tag.
-          make_latest: false
+          prerelease: ${{ steps.meta.outputs.prerelease }}
+          # Only stable vX.Y.Z tags flip this on — nightlies and tagged
+          # pre-releases stay off the "Latest" row on the repo homepage.
+          make_latest: ${{ steps.meta.outputs.make_latest }}
           target_commitish: ${{ github.sha }}
           files: dist/**
           fail_on_unmatched_files: true
           body: |
-            Automated pre-release from CI.
+            Automated release from CI.
 
             - Version: `${{ steps.meta.outputs.version }}`
+            - Channel: ${{ steps.meta.outputs.prerelease == 'true' && 'pre-release' || 'stable' }}
             - Commit: `${{ github.sha }}`
             - Run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
             - Branch / tag: `${{ github.ref }}`
