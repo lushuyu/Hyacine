@@ -15,6 +15,7 @@
   let user = $state('');
   let detail = $state('');
   let copied = $state(false);
+  let uriCopied = $state(false);
   let unsub: UnlistenFn | null = null;
 
   onMount(async () => {
@@ -30,7 +31,7 @@
       return;
     }
 
-    unsub = await ipc.onEvent<DeviceFlowEvent>('rpc:graph.device_flow', (e) => {
+    unsub = await ipc.onEvent<DeviceFlowEvent>('rpc:graph/device_flow', (e) => {
       flow = e.state;
       if (e.user_code) code = e.user_code;
       if (e.verification_uri) uri = e.verification_uri;
@@ -63,9 +64,20 @@
     setTimeout(() => (copied = false), 1500);
   }
 
+  async function copyUri() {
+    if (!uri) return;
+    await navigator.clipboard.writeText(uri);
+    uriCopied = true;
+    setTimeout(() => (uriCopied = false), 1500);
+  }
+
   async function openBrowser() {
     if (!uri) return;
-    await openUrl(uri);
+    try {
+      await openUrl(uri);
+    } catch (err) {
+      pushToast('error', `无法打开浏览器：${String(err)}。请复制 URL 手动访问。`);
+    }
   }
 
   async function cancel() {
@@ -114,6 +126,20 @@
             {#if copied}<Check size="16" class="text-green-500" />{:else}<Copy size="16" />{/if}
           </button>
         </div>
+        <div class="flex items-center gap-2 text-xs">
+          <span class="text-[rgb(var(--fg-muted))]">URL:</span>
+          <code class="select-all rounded bg-[rgb(var(--border)/0.25)] px-2 py-1 font-mono">
+            {uri || '—'}
+          </code>
+          <button
+            class="btn-ghost !p-1"
+            disabled={!uri}
+            onclick={copyUri}
+            aria-label="copy url"
+          >
+            {#if uriCopied}<Check size="14" class="text-green-500" />{:else}<Copy size="14" />{/if}
+          </button>
+        </div>
       </div>
       <div class="flex justify-center gap-3 pt-2">
         <button class="btn-primary" disabled={!uri} onclick={openBrowser}>
@@ -125,6 +151,9 @@
           {$t('graphCancel')}
         </button>
       </div>
+      <p class="text-center text-xs text-[rgb(var(--fg-muted))]">
+        无法自动打开浏览器时，复制上方 URL 手动访问。
+      </p>
     </div>
   {:else if flow === 'approved'}
     <div class="card p-6 space-y-4">

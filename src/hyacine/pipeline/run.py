@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import traceback
 import zoneinfo
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
 from hyacine.config import Settings, YamlConfig, load_yaml_config
@@ -23,6 +24,18 @@ from hyacine.db import Run, Watermark, init_db, session_scope
 from hyacine.llm import summarize
 from hyacine.llm.providers import resolve as resolve_provider
 from hyacine.models import FetchResult, RunRecord, RunStatus
+
+# Display labels for the supported language codes. Only used to append a
+# natural-language instruction to the LLM user message — the system prompt
+# itself is user-owned.
+_LANGUAGE_LABELS = {
+    "en": "English",
+    "zh-CN": "Simplified Chinese (zh-CN / 简体中文)",
+    "zh-TW": "Traditional Chinese (zh-TW / 繁體中文)",
+    "ja": "Japanese (日本語)",
+}
+
+ProgressCallback = Callable[[str, str], None]
 
 # Module-level settings singletons — overridable for tests via monkeypatch
 _settings: Settings | None = None
@@ -93,15 +106,34 @@ def advance_watermark(new_value_utc: datetime) -> None:
             row.updated_at = now
 
 
-def run_pipeline(now_utc: datetime | None = None) -> RunRecord:
+def run_pipeline(
+    now_utc: datetime | None = None,
+    *,
+    dry_run: bool = False,
+    progress: ProgressCallback | None = None,
+) -> RunRecord:
     """Run one full pipeline iteration.
 
-    `now_utc` override is for tests; production path passes None.
+    ``now_utc`` override is for tests; production path passes None.
+    ``dry_run=True`` skips the actual sendMail call (and the watermark
+    advance) so callers like the desktop wizard's preview step can see the
+    rendered output without inboxing anyone.
+    ``progress`` — optional callback invoked as ``(stage, status)`` at each
+    stage boundary. ``stage`` ∈ {fetch, classify, llm, render, deliver};
+    ``status`` ∈ {running, ok, fail}. A no-op default means existing CLI
+    / test callers need no change.
     """
     from hyacine.graph.auth import load_or_create_record
     from hyacine.graph.fetch import fetch_calendar, fetch_emails
     from hyacine.graph.send import send_email
     from hyacine.pipeline.rules import RuleSet, load_rules
+
+    def _p(stage: str, status: str) -> None:
+        if progress is not None:
+            try:
+                progress(stage, status)
+            except Exception:  # noqa: BLE001
+                pass  # never let a misbehaving frontend hook break the pipeline
 
     settings = _get_settings()
     cfg = _get_cfg()
@@ -172,6 +204,7 @@ def run_pipeline(now_utc: datetime | None = None) -> RunRecord:
     send_error: Exception | None = None
 
     # --- Phase 1: Fetch ---
+    _p("fetch", "running")
     try:
         cred, _ = load_or_create_record(
             settings.graph_client_id,
@@ -189,13 +222,17 @@ def run_pipeline(now_utc: datetime | None = None) -> RunRecord:
             finished_at=datetime.now(UTC),
             error_traceback=tb,
         )
+        _p("fetch", "fail")
         try:
             from hyacine.ops.monitoring import ping_healthchecks
             ping_healthchecks(settings.healthchecks_uuid, "fail", tb)
         except Exception:
             pass
         return _load_record()
+    _p("fetch", "ok")
 
+    # --- Phase 2: Classify ---
+    _p("classify", "running")
     ruleset: RuleSet | None = None
     try:
         ruleset = load_rules(settings.rules_path)
@@ -205,8 +242,10 @@ def run_pipeline(now_utc: datetime | None = None) -> RunRecord:
     for email in emails:
         if ruleset is not None:
             email.category_hint = ruleset.classify(email)
+    _p("classify", "ok")
 
-    # --- Phase 2: LLM ---
+    # --- Phase 3: LLM ---
+    _p("llm", "running")
     fetch_result = FetchResult(
         window_from=watermark,
         window_to=now_utc,
@@ -215,6 +254,17 @@ def run_pipeline(now_utc: datetime | None = None) -> RunRecord:
         generated_at=now_utc,
     )
     json_input = fetch_result.model_dump_json()
+
+    # Append a language instruction so the output obeys the user's config
+    # even when their system prompt doesn't mention a language explicitly.
+    # The prompt file is user-owned and often doesn't know about this
+    # setting; the instruction belongs on the user turn so we never
+    # silently edit a file the user can inspect.
+    lang_label = _LANGUAGE_LABELS.get(cfg.language, cfg.language or "English")
+    user_message = (
+        "Generate the daily report from the JSON on stdin. "
+        f"Respond in {lang_label}."
+    )
 
     try:
         # Build the active provider from config. resolve() handles three
@@ -240,6 +290,7 @@ def run_pipeline(now_utc: datetime | None = None) -> RunRecord:
             api_key=api_key,
             model=cfg.llm_model,
             timeout_seconds=cfg.llm_timeout_seconds,
+            user_message=user_message,
         )
     except Exception as exc:
         llm_error = exc
@@ -250,15 +301,34 @@ def run_pipeline(now_utc: datetime | None = None) -> RunRecord:
             email_count=len(emails),
             error_traceback=tb,
         )
+        _p("llm", "fail")
         try:
             from hyacine.ops.monitoring import ping_healthchecks
             ping_healthchecks(settings.healthchecks_uuid, "fail", tb)
         except Exception:
             pass
         return _load_record()
+    _p("llm", "ok")
+    _p("render", "ok")
 
-    # --- Phase 3: Send ---
+    # --- Phase 4: Send (skipped in dry-run) ---
+    _p("deliver", "running")
     subject = f"Hyacine · {now_local.strftime('%Y-%m-%d')}"
+    if dry_run:
+        # Wizard preview path: render the email but DO NOT call sendMail.
+        # We also leave the watermark untouched so the next real run still
+        # picks up the same window — a dry-run must be idempotent.
+        sent_message_id = "(dry-run)"
+        _update_row(
+            status=RunStatus.SUCCESS,
+            finished_at=datetime.now(UTC),
+            email_count=len(emails),
+            markdown=markdown,
+            sent_message_id=sent_message_id,
+        )
+        _p("deliver", "ok")
+        return _load_record()
+
     try:
         sent_message_id = send_email(
             cred,
@@ -276,6 +346,7 @@ def run_pipeline(now_utc: datetime | None = None) -> RunRecord:
             markdown=markdown,
             error_traceback=tb,
         )
+        _p("deliver", "fail")
         try:
             from hyacine.ops.monitoring import ping_healthchecks
             ping_healthchecks(settings.healthchecks_uuid, "fail", tb)
@@ -293,6 +364,7 @@ def run_pipeline(now_utc: datetime | None = None) -> RunRecord:
         markdown=markdown,
         sent_message_id=sent_message_id,
     )
+    _p("deliver", "ok")
 
     try:
         from hyacine.ops.monitoring import ping_healthchecks

@@ -63,11 +63,8 @@ def start_device_flow(*, emit: Callable[[str, Any], None]) -> dict[str, Any]:
         s.graph_tenant_id,
         s.auth_dir,
         disable_automatic_auth=False,
+        prompt_callback=_prompt,
     )
-    # Replace the default stdout prompt with our event emitter. We use
-    # attribute assignment instead of `setattr(cred, const, ...)` to stay
-    # within the project's ruff B010 rule.
-    cred._prompt_callback = _prompt
 
     def _worker() -> None:
         try:
@@ -113,7 +110,18 @@ def me() -> dict[str, Any]:
     rec = load_authentication_record(s.auth_record_path)
     if rec is None:
         return {"signed_in": False}
-    cred = build_credential(s.graph_client_id, s.graph_tenant_id, s.auth_dir, record=rec)
+    # disable_automatic_auth=True → silent-refresh only; a cache miss raises
+    # AuthenticationRequiredError instead of triggering a fresh device-code
+    # flow. Without this, an expired record would drag the main dispatch
+    # thread into an 8s MSAL flow and print the verification prompt to
+    # stdout, corrupting the JSON-RPC channel.
+    cred = build_credential(
+        s.graph_client_id,
+        s.graph_tenant_id,
+        s.auth_dir,
+        record=rec,
+        disable_automatic_auth=True,
+    )
     try:
         token = cred.get_token(*s.scope_list)
         r = httpx.get(
@@ -144,7 +152,14 @@ def _get_access_token() -> str | None:
     rec = load_authentication_record(s.auth_record_path)
     if rec is None:
         return None
-    cred = build_credential(s.graph_client_id, s.graph_tenant_id, s.auth_dir, record=rec)
+    # See `me()` for the reasoning behind disable_automatic_auth=True.
+    cred = build_credential(
+        s.graph_client_id,
+        s.graph_tenant_id,
+        s.auth_dir,
+        record=rec,
+        disable_automatic_auth=True,
+    )
     try:
         return cred.get_token(*s.scope_list).token
     except Exception:  # noqa: BLE001

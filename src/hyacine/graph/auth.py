@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import os
 import stat
+from collections.abc import Callable
 from pathlib import Path
 
 from azure.identity import AuthenticationRecord, DeviceCodeCredential, TokenCachePersistenceOptions
@@ -57,15 +58,22 @@ def build_credential(
     *,
     record: AuthenticationRecord | None = None,
     disable_automatic_auth: bool = False,
+    prompt_callback: Callable[[str, str, object], None] | None = None,
 ) -> DeviceCodeCredential:
     """Construct DeviceCodeCredential with persistent cache + (optional) record.
 
     When `record` is None, the first get_token() call triggers device code flow.
     When `record` is provided, MSAL selects that account silently from cache.
+
+    ``prompt_callback`` is handed straight to MSAL. The IPC sidecar passes an
+    emitter here so the verification URI + user code reach the webview as a
+    ``graph.device_flow`` event instead of being printed to stdout (which
+    would corrupt the JSON-RPC channel). When unset, falls back to a stdout
+    print so the standalone ``bootstrap_auth.py`` CLI still works.
     """
     _ensure_auth_dir(auth_dir)
 
-    def _prompt_callback(verification_uri: str, user_code: str, expires_on: object) -> None:
+    def _default_prompt(verification_uri: str, user_code: str, expires_on: object) -> None:
         print(f"To sign in, visit {verification_uri} and enter code {user_code}", flush=True)
 
     kwargs: dict = dict(
@@ -75,7 +83,7 @@ def build_credential(
             name="hyacine_cache",
             allow_unencrypted_storage=True,
         ),
-        prompt_callback=_prompt_callback,
+        prompt_callback=prompt_callback or _default_prompt,
         disable_automatic_authentication=disable_automatic_auth,
     )
     if record is not None:

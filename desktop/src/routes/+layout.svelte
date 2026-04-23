@@ -3,11 +3,21 @@
   import { onMount } from 'svelte';
   import { ipc } from '$lib/ipc';
   import { sidecarError, toast, setTheme } from '$lib/stores';
+  import { providerName } from '$lib/i18n';
   import { formatError } from '$lib/provider-presets';
   import { fly } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
 
   let { children } = $props();
+
+  // Map the provider's full preset name ("Claude (Claude Code OAuth)",
+  // "DeepSeek (Anthropic-compatible)", …) to something short enough to drop
+  // into UI strings that were originally hardcoded to "Claude". We strip
+  // anything in parentheses and trim.
+  function shortName(full: string): string {
+    const trimmed = full.replace(/\s*\(.*?\)\s*/g, ' ').trim();
+    return trimmed || 'LLM';
+  }
 
   onMount(async () => {
     const pref = (localStorage.getItem('hyacine.theme') || 'auto') as
@@ -23,6 +33,15 @@
       // pending map. Also keep the console.warn for devs tailing logs.
       sidecarError.set(formatError(e));
       console.warn('sidecar failed to start', e);
+      return;
+    }
+    try {
+      const cur = await ipc.providers.current();
+      if (cur?.current?.name) {
+        providerName.set(shortName(cur.current.name));
+      }
+    } catch (e) {
+      console.warn('providers.current failed; falling back to default label', e);
     }
   });
 </script>

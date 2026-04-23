@@ -1,6 +1,6 @@
 [package]
 name = "hyacine-desktop"
-version = "1.0.0"
+version = "1.1.0"
 description = "Hyacine — desktop shell for the Outlook + Claude daily briefing"
 authors = ["Hyacine"]
 edition = "2021"

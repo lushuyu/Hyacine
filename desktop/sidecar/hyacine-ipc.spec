@@ -23,7 +23,11 @@ block_cipher = None
 
 a = Analysis(
     ["entry.py"],
-    pathex=[],
+    # Editable-install hosts expose `hyacine` via a `.pth` shim, which
+    # PyInstaller's modulegraph has been known to miss. Pointing `pathex`
+    # explicitly at the source tree makes Analysis always find the package
+    # whether the venv has it installed, editable, or neither (issue #N).
+    pathex=["../../src"],
     binaries=[],
     datas=[],
     hiddenimports=[],

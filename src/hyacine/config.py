@@ -106,7 +106,15 @@ class Settings(BaseSettings):
 
 
 class YamlConfig(BaseSettings):
-    """Non-secret operational config, loaded from config.yaml."""
+    """Non-secret operational config, loaded from config.yaml.
+
+    The pipeline only consumes the typed fields below, but config.yaml also
+    carries wizard-owned sections (``identity``, ``priorities``) that the
+    prompt renderer / Web UI read directly from the raw YAML. Tell pydantic
+    to ignore those instead of rejecting them.
+    """
+
+    model_config = SettingsConfigDict(extra="ignore")
 
     recipient_email: str = ""               # must be set by wizard
     timezone: str = "UTC"                   # IANA tz, e.g. "America/New_York"

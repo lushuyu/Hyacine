@@ -12,11 +12,56 @@ use crate::sidecar::SidecarState;
 
 #[tauri::command]
 pub async fn rust_probe_claude(state: State<'_, SidecarState>) -> AppResult<ProbeResult> {
-    let key = secrets::get("claude")?.unwrap_or_default();
+    // Route the "Claude" wizard card through `providers.test` so the check
+    // actually exercises whatever provider the user picked (Claude Code OAuth,
+    // Anthropic Console, DeepSeek, Kimi, Groq, Ollama, custom …) — not always
+    // api.anthropic.com with the legacy `"claude"` keychain slug.
+    let cur = state
+        .rpc::<serde_json::Value>("providers.current", json!({}))
+        .await?;
+    let current = cur.get("current").cloned().unwrap_or(serde_json::Value::Null);
+    let slug = current
+        .get("secret_slug")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
+    let provider_id = current
+        .get("id")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
+    let api_format = current
+        .get("api_format")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
+    let base_url = current
+        .get("base_url")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
+    let model = current
+        .get("default_model")
+        .and_then(|x| x.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    // Pick the right keychain slot. Fall back to the legacy `"claude"`
+    // slot so pre-multi-provider installs still pass without a reconfig.
+    let key = secrets::get(&slug)?
+        .or_else(|| secrets::get("claude").ok().flatten())
+        .unwrap_or_default();
+
     let v = state
         .rpc::<serde_json::Value>(
-            "connectivity.probe",
-            json!({ "kind": "claude", "api_key": key }),
+            "providers.test",
+            json!({
+                "provider_id": provider_id,
+                "api_format": api_format,
+                "base_url": base_url,
+                "model": model,
+                "api_key": key,
+            }),
         )
         .await?;
     Ok(ProbeResult {
