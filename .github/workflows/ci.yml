@@ -283,3 +283,107 @@ jobs:
           path: ${{ matrix.artifact-glob }}
           if-no-files-found: error
           retention-days: 14
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Pre-release publish. Takes the installers the desktop matrix just
+  # produced and ships them as a GitHub Release marked `prerelease: true`.
+  #
+  # Tag selection:
+  # - refs/tags/v*        → use the tag verbatim; this is how a real
+  #                          release cut happens (`git tag v1.2.3 && git push`).
+  # - refs/heads/main     → rolling `nightly` release; each main push
+  #                          replaces the prior one so users always grab
+  #                          "latest built from main".
+  # - any other ref       → skip (PRs, feature branches).
+  #
+  # The release is always prerelease=true so the latest-tag promotion on
+  # GitHub's UI is a deliberate, human action — never an accident of a
+  # nightly push.
+  # ──────────────────────────────────────────────────────────────────────
+  prerelease:
+    name: Publish pre-release
+    needs: [python, desktop]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ubuntu-latest
+    permissions:
+      # softprops/action-gh-release needs write to the Contents API for
+      # release + tag creation. No other scopes required.
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Full history so release notes could cite prior tags later
+          # (not used today, but the extra 2s is worth the option).
+          fetch-depth: 0
+
+      - name: Download installer artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          # Flatten every matrix artifact into one directory — each one
+          # already includes the target triple in its filename, so there
+          # are no collisions. Release assets don't support nested dirs.
+          merge-multiple: true
+          pattern: hyacine-*
+
+      - name: List downloaded artifacts
+        run: ls -la dist/ && find dist -type f | head -40
+
+      - name: Compute release metadata
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          short_sha="${GITHUB_SHA:0:7}"
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            tag="${GITHUB_REF#refs/tags/}"
+            title="Hyacine ${tag}"
+            rolling="false"
+          else
+            tag="nightly"
+            title="Nightly (main @ ${short_sha})"
+            rolling="true"
+          fi
+          {
+            echo "tag=${tag}"
+            echo "title=${title}"
+            echo "rolling=${rolling}"
+            echo "short_sha=${short_sha}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Clear previous rolling nightly
+        # Only for the rolling case: delete the existing `nightly` release
+        # (and its tag) so the new one points at this commit and the asset
+        # list doesn't accumulate stale uploads from prior builds.
+        if: steps.meta.outputs.rolling == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if gh release view nightly --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release delete nightly --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag
+          else
+            echo "No prior nightly release; nothing to clear."
+          fi
+
+      - name: Publish pre-release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.title }}
+          prerelease: true
+          # Never mark a pre-release as "Latest" on the repo homepage —
+          # that bit should only flip when a human promotes a real tag.
+          make_latest: false
+          target_commitish: ${{ github.sha }}
+          files: dist/**
+          fail_on_unmatched_files: true
+          body: |
+            Automated pre-release from CI.
+
+            - Commit: `${{ github.sha }}`
+            - Run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            - Branch / tag: `${{ github.ref }}`
+
+            Installers are **unsigned** — see the desktop README for the one-time
+            SmartScreen / Gatekeeper bypass instructions.

@@ -24,10 +24,29 @@ from hyacine.ipc.protocol import INVALID_PARAMS, RpcError
 
 @pytest.fixture
 def tmp_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Point HYACINE_REPO_ROOT at an empty tmpdir so each test gets a fresh
-    config.yaml without touching the repo or the user's real config."""
+    """Point every HYACINE_* path override at a fresh tmpdir so tests can
+    never accidentally write to the developer's real config.
+
+    Setting ``HYACINE_REPO_ROOT`` alone is *not* enough: ``Settings`` also
+    honors per-path overrides like ``HYACINE_CONFIG_PATH`` — either
+    exported in the shell or loaded from the repo ``.env`` — and any of
+    those would beat the repo-root fallback. We drop them all first, then
+    pin ``HYACINE_CONFIG_PATH`` explicitly so there is zero ambiguity
+    about which file ``write_config()`` touches.
+    """
     (tmp_path / "config").mkdir()
+    for leak in (
+        "HYACINE_CONFIG_PATH",
+        "HYACINE_RULES_PATH",
+        "HYACINE_PROMPT_PATH",
+        "HYACINE_DB_PATH",
+        "HYACINE_AUTH_DIR",
+        "HYACINE_LOG_DIR",
+        "HYACINE_AUTH_RECORD_PATH",
+    ):
+        monkeypatch.delenv(leak, raising=False)
     monkeypatch.setenv("HYACINE_REPO_ROOT", str(tmp_path))
+    monkeypatch.setenv("HYACINE_CONFIG_PATH", str(tmp_path / "config" / "config.yaml"))
     return tmp_path
 
 
