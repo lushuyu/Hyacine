@@ -357,40 +357,37 @@ jobs:
 
       - name: Compute release metadata
         id: meta
+        # Mirrors the "Stamp build version" step in the desktop job so the
+        # release tag matches the version embedded inside the installer.
+        #
+        # - refs/tags/v*   → use the tag verbatim, e.g. `v1.2.3`.
+        # - refs/heads/main → derive `major.minor.<run_number>` from
+        #                     tauri.conf.json + GITHUB_RUN_NUMBER, then tag
+        #                     `nightly-<version>`. GITHUB_RUN_NUMBER climbs
+        #                     with every workflow run so each nightly gets a
+        #                     unique tag — no need to delete the prior tag,
+        #                     no race against the upload step.
         shell: bash
         run: |
           set -euo pipefail
           short_sha="${GITHUB_SHA:0:7}"
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            tag="${GITHUB_REF#refs/tags/}"
+            version="${GITHUB_REF#refs/tags/v}"
+            tag="v${version}"
             title="Hyacine ${tag}"
-            rolling="false"
           else
-            tag="nightly"
-            title="Nightly (main @ ${short_sha})"
-            rolling="true"
+            major=$(jq -r .version desktop/src-tauri/tauri.conf.json | cut -d. -f1)
+            minor=$(jq -r .version desktop/src-tauri/tauri.conf.json | cut -d. -f2)
+            version="${major}.${minor}.${GITHUB_RUN_NUMBER:-0}"
+            tag="nightly-${version}"
+            title="Nightly ${version} (main @ ${short_sha})"
           fi
           {
             echo "tag=${tag}"
             echo "title=${title}"
-            echo "rolling=${rolling}"
+            echo "version=${version}"
             echo "short_sha=${short_sha}"
           } >> "$GITHUB_OUTPUT"
-
-      - name: Clear previous rolling nightly
-        # Only for the rolling case: delete the existing `nightly` release
-        # (and its tag) so the new one points at this commit and the asset
-        # list doesn't accumulate stale uploads from prior builds.
-        if: steps.meta.outputs.rolling == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          if gh release view nightly --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release delete nightly --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag
-          else
-            echo "No prior nightly release; nothing to clear."
-          fi
 
       - name: Publish pre-release
         uses: softprops/action-gh-release@v2
@@ -407,6 +404,7 @@ jobs:
           body: |
             Automated pre-release from CI.
 
+            - Version: `${{ steps.meta.outputs.version }}`
             - Commit: `${{ github.sha }}`
             - Run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
             - Branch / tag: `${{ github.ref }}`
