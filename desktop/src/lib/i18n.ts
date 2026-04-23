@@ -110,8 +110,11 @@ const messages = {
     providerKeyLooksGood: 'Looks good —',
     providerCliHeader: 'Uses the',
     providerCliBody:
-      "Run the command below in your terminal to authenticate; Hyacine picks up the resulting token via the subprocess. No key is needed in this screen.",
+      "Two ways to authenticate. (a) If you've already run `claude login` on this machine, leave the field below empty — Hyacine calls the `claude` CLI and it reads your stored credentials automatically. (b) Otherwise run the command below to generate a long-lived token, then paste it into the field.",
     providerCliSetupCmd: 'claude setup-token',
+    providerCliPasteOptional: 'Long-lived token (optional)',
+    providerCliPasteHint:
+      "Leave empty if `claude login` is already done. Otherwise paste the `sk-ant-oat…` token printed by `claude setup-token`.",
     providerDocs: 'Docs',
     providerCategoryOfficial: 'Official',
     providerCategoryRelay: 'Anthropic-compatible relay',
@@ -323,8 +326,12 @@ const messages = {
     providerReplace: '更换',
     providerKeyLooksGood: '格式正确 —',
     providerCliHeader: '使用',
-    providerCliBody: '在终端里运行下面的命令完成登录；Hyacine 会通过子进程读取生成的 token。此步不需要输入密钥。',
+    providerCliBody:
+      '两种登录方式。(a) 如果你已经在本机跑过 `claude login`，下面的输入框留空即可 —— Hyacine 调用 `claude` CLI 时它会自动读取本地凭证。(b) 否则运行下面的命令生成一个长期 token，粘贴到下方的输入框。',
     providerCliSetupCmd: 'claude setup-token',
+    providerCliPasteOptional: '长期 token（可选）',
+    providerCliPasteHint:
+      '已经 `claude login` 过就留空。否则把 `claude setup-token` 打印出来的 `sk-ant-oat…` 粘贴进来。',
     providerDocs: '文档',
     providerCategoryOfficial: '官方',
     providerCategoryRelay: 'Anthropic 兼容中继',

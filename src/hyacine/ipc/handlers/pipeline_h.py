@@ -68,16 +68,14 @@ def _inject_claude_code_oauth() -> None:
 def _claude_token_missing() -> str | None:
     """Return a human-readable reason if pipeline execution can't proceed.
 
-    ``hyacine.llm.claude_code.build_env`` raises if
-    ``CLAUDE_CODE_OAUTH_TOKEN`` is absent. Catching that upstream gives a
-    much clearer message than the raw exception traceback the webview would
-    otherwise see in ``result.error``.
+    Historically this returned an error whenever ``CLAUDE_CODE_OAUTH_TOKEN``
+    was absent — but that blocked ``claude login`` users, for whom the CLI
+    reads credentials from its own store. With :func:`build_env` no longer
+    raising on a missing token (issue #10), we let ``claude -p`` attempt its
+    own auth and surface whatever error comes back. Returning ``None``
+    unconditionally preserves the signature for callers; the only real
+    blockers (claude binary missing) show up further down the pipeline.
     """
-    if not os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
-        return (
-            "CLAUDE_CODE_OAUTH_TOKEN is not set. Re-run the Claude key step "
-            "or export the token in the sidecar environment before retrying."
-        )
     return None
 
 
@@ -94,6 +92,10 @@ def dry_run(
     started = time.time()
     _inject_claude_code_oauth()
 
+    # Previously we gated on CLAUDE_CODE_OAUTH_TOKEN here; since issue #10
+    # relaxed build_env to let `claude` self-auth from its own credential
+    # store, we just call through and surface whatever error the pipeline
+    # (or `claude -p`) emits. The helper returns None unconditionally now.
     if (missing := _claude_token_missing()) is not None:
         for stage in _STAGES:
             _emit_stage(emit, stage, "fail")
@@ -148,6 +150,10 @@ def run(
     started = time.time()
     _inject_claude_code_oauth()
 
+    # Previously we gated on CLAUDE_CODE_OAUTH_TOKEN here; since issue #10
+    # relaxed build_env to let `claude` self-auth from its own credential
+    # store, we just call through and surface whatever error the pipeline
+    # (or `claude -p`) emits. The helper returns None unconditionally now.
     if (missing := _claude_token_missing()) is not None:
         for stage in _STAGES:
             _emit_stage(emit, stage, "fail")

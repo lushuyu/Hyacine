@@ -145,9 +145,15 @@ def test(  # noqa: C901 — mirrors providers.api_format branches; keeping a sin
 def _probe_anthropic_cli(*, api_key: str, model: str) -> dict[str, Any]:
     """Invoke ``claude -p "ping"`` with the given OAuth token.
 
-    Returns early with ``status == "skipped"`` when the ``claude`` binary
-    can't be found on PATH, since there's no meaningful probe we can run
-    locally in that case.
+    ``CLAUDE_CODE_OAUTH_TOKEN`` is preferred but not required: when the user
+    hasn't pasted a long-lived token yet, ``claude`` reads the credentials
+    written by ``claude login`` (``~/.claude/`` or platform keychain). Either
+    path is a legitimate "configured" state, so we let the CLI resolve auth
+    and surface whatever error comes back if neither source has creds —
+    rather than pre-failing with a confusing "skipped" verdict.
+
+    Genuine blockers (the ``claude`` binary itself being absent) still fail
+    loud; that's what the :func:`resolve_claude_bin` branch below catches.
     """
     from hyacine.llm.claude_code import resolve_claude_bin  # noqa: PLC0415
 
@@ -157,13 +163,6 @@ def _probe_anthropic_cli(*, api_key: str, model: str) -> dict[str, Any]:
         env["CLAUDE_CODE_OAUTH_TOKEN"] = api_key.strip()
     env.pop("ANTHROPIC_API_KEY", None)
     env.pop("ANTHROPIC_AUTH_TOKEN", None)
-    if "CLAUDE_CODE_OAUTH_TOKEN" not in env:
-        return {
-            "kind": "providers.test",
-            "status": "skipped",
-            "latency_ms": 0,
-            "detail": "no OAuth token",
-        }
     try:
         bin_path = resolve_claude_bin(env)
     except Exception as e:  # noqa: BLE001
