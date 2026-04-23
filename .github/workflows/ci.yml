@@ -285,8 +285,16 @@ jobs:
           retention-days: 14
 
   # ──────────────────────────────────────────────────────────────────────
-  # Pre-release publish. Takes the installers the desktop matrix just
-  # produced and ships them as a GitHub Release marked `prerelease: true`.
+  # Pre-release publish. Takes whatever installers the desktop matrix
+  # managed to produce and ships them as a GitHub Release marked
+  # `prerelease: true`.
+  #
+  # Partial matrix is OK. `always()` + `python.result == 'success'` lets
+  # us publish when e.g. one platform's tauri-bundler has a transient
+  # flake (the macOS bundle_dmg.sh is historically prone to this) — users
+  # on the four green platforms get their installers now, and the flaky
+  # one can be rerun at leisure. If ZERO cells succeed we bail loudly so
+  # the job doesn't quietly publish an empty release.
   #
   # Tag selection:
   # - refs/tags/v*        → use the tag verbatim; this is how a real
@@ -303,7 +311,15 @@ jobs:
   prerelease:
     name: Publish pre-release
     needs: [python, desktop]
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    # `always()` bypasses the default "skip if any needed job failed"
+    # behaviour so a single flaky matrix cell doesn't block the nightly
+    # entirely. We still require Python tests to be green (non-negotiable)
+    # and gate on the push ref so PRs never publish.
+    if: >-
+      always()
+      && needs.python.result == 'success'
+      && github.event_name == 'push'
+      && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
     permissions:
       # softprops/action-gh-release needs write to the Contents API for
@@ -328,6 +344,16 @@ jobs:
 
       - name: List downloaded artifacts
         run: ls -la dist/ && find dist -type f | head -40
+
+      - name: Abort if no installers were produced
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$(find dist -mindepth 1 -type f 2>/dev/null | head -1)" ]]; then
+            echo "::error::No installer artifacts present — every desktop matrix cell failed. Aborting release."
+            exit 1
+          fi
+          echo "Found $(find dist -type f | wc -l) installer file(s) to publish."
 
       - name: Compute release metadata
         id: meta
