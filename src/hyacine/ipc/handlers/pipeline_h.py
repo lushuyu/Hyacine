@@ -49,34 +49,20 @@ def _silence_stdout() -> Any:
 
 
 def _inject_claude_code_oauth() -> None:
-    """Populate ``CLAUDE_CODE_OAUTH_TOKEN`` from the env if not already set.
+    """Populate ``CLAUDE_CODE_OAUTH_TOKEN`` from a sidecar-side alias if unset.
 
-    The Rust parent writes the token into the environment it hands us, but if
-    an end user is running the sidecar on its own (or in tests) the env var
-    might be missing; we accept ``HYACINE_CLAUDE_CODE_OAUTH_TOKEN`` as a
-    fallback. Callers must still validate presence themselves via
-    :func:`_claude_token_missing` — we don't raise here because a few
-    handlers (history, dry-run renders from cache) don't require the token.
+    The Rust parent normally writes the token into our env directly, but when
+    the sidecar is launched standalone (tests, dev shell, CI) it may only see
+    ``HYACINE_CLAUDE_CODE_OAUTH_TOKEN``. Forward it to the canonical var so
+    ``claude -p`` reads it transparently. No-op when the var is missing on
+    both sides — ``claude`` will then fall back to ``claude login`` creds
+    (issue #10).
     """
     if os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
         return
     from_env = os.environ.get("HYACINE_CLAUDE_CODE_OAUTH_TOKEN", "")
     if from_env:
         os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = from_env
-
-
-def _claude_token_missing() -> str | None:
-    """Return a human-readable reason if pipeline execution can't proceed.
-
-    Historically this returned an error whenever ``CLAUDE_CODE_OAUTH_TOKEN``
-    was absent — but that blocked ``claude login`` users, for whom the CLI
-    reads credentials from its own store. With :func:`build_env` no longer
-    raising on a missing token (issue #10), we let ``claude -p`` attempt its
-    own auth and surface whatever error comes back. Returning ``None``
-    unconditionally preserves the signature for callers; the only real
-    blockers (claude binary missing) show up further down the pipeline.
-    """
-    return None
 
 
 def dry_run(
@@ -91,19 +77,6 @@ def dry_run(
     """
     started = time.time()
     _inject_claude_code_oauth()
-
-    # Previously we gated on CLAUDE_CODE_OAUTH_TOKEN here; since issue #10
-    # relaxed build_env to let `claude` self-auth from its own credential
-    # store, we just call through and surface whatever error the pipeline
-    # (or `claude -p`) emits. The helper returns None unconditionally now.
-    if (missing := _claude_token_missing()) is not None:
-        for stage in _STAGES:
-            _emit_stage(emit, stage, "fail")
-        return {
-            "ok": False,
-            "error": missing,
-            "duration_ms": int((time.time() - started) * 1000),
-        }
 
     try:
         from hyacine.pipeline.run import run_pipeline  # noqa: PLC0415
@@ -149,19 +122,6 @@ def run(
     """Real pipeline run — fetch + summarise + deliver."""
     started = time.time()
     _inject_claude_code_oauth()
-
-    # Previously we gated on CLAUDE_CODE_OAUTH_TOKEN here; since issue #10
-    # relaxed build_env to let `claude` self-auth from its own credential
-    # store, we just call through and surface whatever error the pipeline
-    # (or `claude -p`) emits. The helper returns None unconditionally now.
-    if (missing := _claude_token_missing()) is not None:
-        for stage in _STAGES:
-            _emit_stage(emit, stage, "fail")
-        return {
-            "ok": False,
-            "error": missing,
-            "duration_ms": int((time.time() - started) * 1000),
-        }
 
     try:
         from hyacine.pipeline.run import run_pipeline  # noqa: PLC0415
