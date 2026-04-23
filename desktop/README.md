@@ -88,11 +88,13 @@ cd desktop
 npm run dev     # http://localhost:5173 in any Windows browser
 ```
 
-In UI-only mode the Tauri `invoke` bridge is inert, so anything that
-goes through `$lib/ipc` (secrets, sidecar RPC, connectivity probes)
-will fail silently — wizard pages that purely render still work. For
-anything that actually talks to the sidecar, you need the Tauri shell,
-which means WSLg (or running natively).
+In UI-only mode the Tauri `invoke` bridge isn't present in the
+browser, so anything that goes through `$lib/ipc` (secrets, sidecar
+RPC, connectivity probes) will reject visibly — you'll see a "sidecar
+unreachable" banner and any action that needs Tauri surfaces a toast
+error. Wizard pages that purely render still work. For anything that
+actually talks to the sidecar, you need the Tauri shell, which means
+WSLg (or running natively).
 
 Debugging the Python sidecar directly is also easy in WSL — the
 sidecar is just a stdio JSON-RPC process, so `python3 -m hyacine.ipc`

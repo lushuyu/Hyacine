@@ -35,6 +35,10 @@
   // typed something.
   let pickedModel = $state('');
   let modelTouched = $state(false);
+  // Escape hatch from a preset's curated model dropdown to free-text
+  // entry. The `__other__` sentinel option flips this; preset swap
+  // clears it so the new preset's catalogue shows as a dropdown again.
+  let forceFreeText = $state(false);
 
   // Key entry state.
   let key = $state('');
@@ -53,11 +57,16 @@
   const effectiveFormat = $derived<ApiFormat>(
     selectedId === 'custom' ? customFormat : (selectedPreset?.api_format ?? 'anthropic_cli')
   );
-  const effectiveBaseUrl = $derived(
-    selectedId === 'custom' ? customBaseUrl : (selectedPreset?.base_url ?? '')
+  /** Sensible fallback model when Custom has no user-chosen value —
+   *  picked per protocol so the first save never lands `sonnet` on an
+   *  OpenAI-compatible endpoint (the previous bug) or vice versa. */
+  const customDefaultModel = $derived(
+    customFormat === 'anthropic_http' ? 'claude-sonnet-4-5' : 'gpt-4o-mini'
   );
   const effectiveModel = $derived(
-    pickedModel || selectedPreset?.default_model || ''
+    pickedModel ||
+      selectedPreset?.default_model ||
+      (selectedId === 'custom' ? customDefaultModel : '')
   );
 
   // Local providers (Ollama, LM Studio, a localhost base URL) don't
@@ -90,7 +99,9 @@
   const modelOptions = $derived<string[]>(
     selectedId === 'custom' ? [] : (selectedPreset?.models ?? [])
   );
-  const showModelSelect = $derived(modelOptions.length > 1);
+  const showModelSelect = $derived(
+    modelOptions.length > 1 && !forceFreeText
+  );
   // If the typed value drifted off the preset's catalogue, keep showing the
   // input instead of silently snapping back when the dropdown resets.
   const modelValueInCatalogue = $derived(
@@ -112,6 +123,15 @@
     try {
       const cur = await ipc.providers.current();
       if (cur.current?.id) selectedId = cur.current.id;
+      // Custom endpoints have no preset-level format/base_url, so we have
+      // to hydrate those from providers.current() explicitly — otherwise
+      // re-entering the wizard on a saved custom config would show the
+      // default `openai_chat` + blank base URL and, on Continue, clobber
+      // the user's saved settings with those empties.
+      if (cur.current?.id === 'custom') {
+        if (cur.current.api_format) customFormat = cur.current.api_format;
+        if (cur.current.base_url) customBaseUrl = cur.current.base_url;
+      }
       if (cur.current?.default_model) {
         pickedModel = cur.current.default_model;
         modelTouched = true;
@@ -153,6 +173,7 @@
     testDetail = '';
     latencyMs = null;
     modelTouched = false;
+    forceFreeText = false;
     syncDefaultModel();
     refreshExistingKey();
   }
@@ -220,7 +241,10 @@
         fields.llm_provider = '';
         fields.llm_api_format = customFormat;
         fields.llm_base_url = customBaseUrl;
-        if (effectiveModel) fields.llm_model = effectiveModel;
+        // Always persist a concrete model. Without this the yaml loader
+        // falls back to YamlConfig.llm_model = 'sonnet', which breaks
+        // OpenAI-protocol custom endpoints on the first call.
+        fields.llm_model = effectiveModel;
       } else if (selectedPreset) {
         fields.llm_provider = selectedId;
         fields.llm_api_format = '';
@@ -452,17 +476,30 @@
         <select
           class="input"
           value={pickedModel || modelOptions[0]}
-          onchange={(e) => onModelEdit((e.currentTarget as HTMLSelectElement).value)}
+          onchange={(e) => {
+            const v = (e.currentTarget as HTMLSelectElement).value;
+            if (v === '__other__') {
+              // Switch to free-text entry and clear so the input is empty
+              // and immediately focusable. The sentinel is never persisted
+              // — effectiveModel falls through to pickedModel (typed) or a
+              // protocol-appropriate default.
+              forceFreeText = true;
+              onModelEdit('');
+            } else {
+              onModelEdit(v);
+            }
+          }}
         >
           {#each modelOptions as m (m)}
             <option value={m}>{m}</option>
           {/each}
+          <option value="__other__">{$t('providerModelOther')}</option>
         </select>
       {:else}
         <input
           class="input font-mono text-xs"
           value={pickedModel}
-          placeholder={selectedPreset?.default_model ?? 'gpt-4o-mini'}
+          placeholder={selectedPreset?.default_model ?? customDefaultModel}
           oninput={(e) => onModelEdit((e.currentTarget as HTMLInputElement).value)}
         />
       {/if}
