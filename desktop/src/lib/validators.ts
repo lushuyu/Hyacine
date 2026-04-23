@@ -87,3 +87,33 @@ export function commonTimezones(): string[] {
     'Pacific/Auckland'
   ];
 }
+
+/**
+ * Full IANA list when the runtime supports `Intl.supportedValuesOf`
+ * (Chromium 99+, Safari 15.4+, which Tauri's webview exceeds on every
+ * supported platform). Falls back to the curated set + system zone so
+ * the picker is never empty on older engines.
+ */
+export function allTimezones(): string[] {
+  try {
+    const anyIntl = Intl as unknown as { supportedValuesOf?: (k: string) => string[] };
+    if (typeof anyIntl.supportedValuesOf === 'function') {
+      const list = anyIntl.supportedValuesOf('timeZone');
+      if (Array.isArray(list) && list.length > 0) return list;
+    }
+  } catch {
+    /* fall through */
+  }
+  const fallback = new Set(commonTimezones());
+  const sys = systemTimezone();
+  if (sys) fallback.add(sys);
+  return [...fallback].sort();
+}
+
+export function systemTimezone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+  } catch {
+    return '';
+  }
+}

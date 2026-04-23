@@ -7,6 +7,7 @@
   import { setTheme, type Theme } from '$lib/stores';
   import { t } from '$lib/i18n';
   import { KeyRound, RefreshCw, LogOut } from 'lucide-svelte';
+  import TimezoneCombobox from '$lib/components/TimezoneCombobox.svelte';
 
   let cfg = $state<{
     recipient_email: string;
@@ -125,7 +126,7 @@
         <div class="grid grid-cols-3 gap-3">
           <label class="block">
             <span class="mb-1 block text-xs text-[rgb(var(--fg-muted))]">{$t('settingsTimezone')}</span>
-            <input class="input" bind:value={cfg.timezone} />
+            <TimezoneCombobox bind:value={cfg.timezone} placeholder={$t('deliveryTzPlaceholder')} />
           </label>
           <label class="block">
             <span class="mb-1 block text-xs text-[rgb(var(--fg-muted))]">{$t('settingsRunTime')}</span>

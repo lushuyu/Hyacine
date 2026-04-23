@@ -2,20 +2,12 @@
   import { goto } from '$app/navigation';
   import { wizard } from '$lib/stores';
   import { t } from '$lib/i18n';
-  import { isEmail, isTz, commonTimezones } from '$lib/validators';
+  import { isEmail, isTz, systemTimezone } from '$lib/validators';
+  import TimezoneCombobox from '$lib/components/TimezoneCombobox.svelte';
 
   let email = $state($wizard.delivery.email);
-  let tz = $state($wizard.delivery.timezone || detectTz());
+  let tz = $state($wizard.delivery.timezone || systemTimezone() || 'UTC');
   let outLang = $state<'en' | 'zh-CN'>($wizard.delivery.language);
-  const tzs = commonTimezones();
-
-  function detectTz(): string {
-    try {
-      return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-    } catch {
-      return 'UTC';
-    }
-  }
 
   const emailOk = $derived(isEmail(email));
   const tzOk = $derived(isTz(tz));
@@ -58,12 +50,7 @@
       <span class="mb-1.5 block text-xs font-semibold text-[rgb(var(--fg-muted))]"
         >{$t('deliveryTz')}</span
       >
-      <input class="input" list="tz-list" bind:value={tz} />
-      <datalist id="tz-list">
-        {#each tzs as z}
-          <option value={z}></option>
-        {/each}
-      </datalist>
+      <TimezoneCombobox bind:value={tz} placeholder={$t('deliveryTzPlaceholder')} />
       {#if tz && !tzOk}
         <p class="mt-1 text-xs text-red-500">{$t('deliveryTzInvalid')}</p>
       {/if}
