@@ -122,7 +122,12 @@ jobs:
             libssl-dev \
             libwebkit2gtk-4.1-dev \
             libxdo-dev \
-            patchelf
+            patchelf \
+            xdg-utils
+          # xdg-utils ships `xdg-open`, which tauri-bundler embeds into the
+          # AppImage/deb at bundle time. ubuntu-22.04 has it preinstalled;
+          # ubuntu-24.04-arm doesn't, so the bundler fails with "xdg-open
+          # binary not found (os error 2)". Install unconditionally.
 
       # ── Rust toolchain ────────────────────────────────────────────────
       - uses: dtolnay/rust-toolchain@stable
