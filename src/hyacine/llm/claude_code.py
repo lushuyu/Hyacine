@@ -1,9 +1,10 @@
 """Subprocess wrapper for `claude -p` headless invocation.
 
 Critical environment rules (see task brief §1):
-  - CLAUDE_CODE_OAUTH_TOKEN must be present.
   - ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN must be UNSET — otherwise they
     silently override OAuth and bill to the Console account.
+  - CLAUDE_CODE_OAUTH_TOKEN is preferred but *optional*: when absent, `claude`
+    falls back to its own credential store (populated by `claude login`).
   - Parse stdout JSON `result` field. Do NOT trust exit code (known bug).
 """
 from __future__ import annotations
@@ -20,12 +21,21 @@ class ClaudeCodeError(RuntimeError):
 
 
 def build_env(base_env: dict[str, str]) -> dict[str, str]:
-    """Return a copy of base_env with OAuth kept and API-key vars scrubbed."""
-    if "CLAUDE_CODE_OAUTH_TOKEN" not in base_env:
-        raise ClaudeCodeError(
-            "CLAUDE_CODE_OAUTH_TOKEN is not set in the environment. "
-            "Set it before invoking the claude subprocess."
-        )
+    """Return a copy of base_env with OAuth kept and API-key vars scrubbed.
+
+    ``CLAUDE_CODE_OAUTH_TOKEN`` is *not required* here — ``claude setup-token``
+    only prints a token to stdout (doesn't persist it anywhere), while
+    ``claude login`` writes credentials to ``~/.claude/`` or the OS keychain
+    that subsequent ``claude -p`` invocations read automatically. Hard-raising
+    when the env var is missing would block users who authenticated via
+    ``claude login``. If neither source of credentials exists, ``claude -p``
+    will surface its own ``Not authenticated`` error — that's the right layer
+    to handle the failure.
+
+    The API-key scrubbing is unconditional: those vars override OAuth and
+    would silently bill to the Console account instead of using the user's
+    Claude Code subscription.
+    """
     env = base_env.copy()
     env.pop("ANTHROPIC_API_KEY", None)
     env.pop("ANTHROPIC_AUTH_TOKEN", None)

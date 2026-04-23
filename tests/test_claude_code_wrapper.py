@@ -43,13 +43,22 @@ class TestBuildEnv:
         assert result["HOME"] == "/home/user"
         assert result["USER"] == "bob"
 
-    def test_raises_without_oauth_token(self) -> None:
+    def test_no_raise_without_oauth_token(self) -> None:
+        # build_env intentionally does NOT require CLAUDE_CODE_OAUTH_TOKEN —
+        # `claude login` users have their creds in ~/.claude/ or the OS
+        # keychain, and the `claude` CLI reads those automatically when no
+        # env var is set. Issue #10 softened this path; the API-key scrub
+        # is what stays unconditional.
         base = {
             "ANTHROPIC_API_KEY": "key",
+            "ANTHROPIC_AUTH_TOKEN": "also-key",
             "PATH": "/usr/bin",
         }
-        with pytest.raises(ClaudeCodeError, match="CLAUDE_CODE_OAUTH_TOKEN"):
-            build_env(base)
+        result = build_env(base)
+        assert "ANTHROPIC_API_KEY" not in result
+        assert "ANTHROPIC_AUTH_TOKEN" not in result
+        assert "CLAUDE_CODE_OAUTH_TOKEN" not in result
+        assert result["PATH"] == "/usr/bin"
 
     def test_does_not_mutate_base(self) -> None:
         base = {

@@ -61,6 +61,11 @@
   const requiresKey = $derived(effectiveFormat !== 'anthropic_cli' && !isLocalProvider);
   const requiresBaseUrl = $derived(selectedId === 'custom');
 
+  // Covers "key is optional, but if entered it must be valid". Today this only
+  // fires on the anthropic_cli paste field — users who leave it blank rely on
+  // `claude login`; users who paste must paste something `isClaudeKey` accepts.
+  const keyEnteredButInvalid = $derived(key.trim() !== '' && !validity.ok);
+
   // Keychain slug for the secret. Preset providers use their own id;
   // custom endpoints share a single stable slug so the pipeline's
   // resolve() helper can always find the key.
@@ -127,6 +132,13 @@
     // the active provider's keychain slot at spawn time.
     const usingStored = existingForSlug && !key;
     if (!usingStored && requiresKey && !validity.ok) {
+      pushToast('error', `Invalid key: ${validity.reason}`);
+      return;
+    }
+    // CLI + local providers make the key optional, but if the user *did*
+    // type something it must be a valid claude key — otherwise the probe
+    // would go out with obvious junk. Block early.
+    if (keyEnteredButInvalid) {
       pushToast('error', `Invalid key: ${validity.reason}`);
       return;
     }
@@ -400,30 +412,87 @@
       </label>
     {/if}
   {:else if effectiveFormat === 'anthropic_cli'}
-    <div class="card flex items-start gap-3 p-4 text-sm">
-      <Sparkles size="16" class="mt-0.5 text-[rgb(var(--accent))]" />
-      <div class="space-y-1">
-        <div class="font-medium">
-          {$t('providerCliHeader')}
-          <code class="rounded bg-[rgb(var(--border)/0.4)] px-1.5 py-0.5 font-mono text-[11px]">claude</code>
-          CLI
+    {#if existingForSlug}
+      <div class="card flex items-center gap-3 p-4">
+        <Lock size="18" class="text-[rgb(var(--accent))]" />
+        <div class="flex-1">
+          <div class="text-sm font-medium">{$t('providerKeyStored')}</div>
+          <div class="text-xs text-[rgb(var(--fg-muted))]">{$t('providerKeyStoredNote')} {slug}</div>
         </div>
-        <p class="text-[rgb(var(--fg-muted))]">{$t('providerCliBody')}</p>
-        <p class="text-[rgb(var(--fg-muted))]">
-          <code class="rounded bg-[rgb(var(--border)/0.4)] px-1.5 py-0.5 font-mono text-[11px]">{$t('providerCliSetupCmd')}</code>
-        </p>
-        {#if selectedPreset?.docs_url}
-          <a
-            href={selectedPreset.docs_url}
-            target="_blank"
-            rel="noopener"
-            class="inline-flex items-center gap-1 text-xs text-[rgb(var(--accent))] hover:underline"
-          >
-            {$t('providerDocs')} <ExternalLink size="10" />
-          </a>
-        {/if}
+        <button class="btn-ghost !text-xs" onclick={clearStoredKey}>{$t('providerReplace')}</button>
       </div>
-    </div>
+    {:else}
+      <div class="card space-y-3 p-4 text-sm">
+        <div class="flex items-start gap-3">
+          <Sparkles size="16" class="mt-0.5 flex-shrink-0 text-[rgb(var(--accent))]" />
+          <div class="flex-1 space-y-1">
+            <div class="font-medium">
+              {$t('providerCliHeader')}
+              <code class="rounded bg-[rgb(var(--border)/0.4)] px-1.5 py-0.5 font-mono text-[11px]">claude</code>
+              CLI
+            </div>
+            <p class="text-[rgb(var(--fg-muted))]">{$t('providerCliBody')}</p>
+            <p class="text-[rgb(var(--fg-muted))]">
+              <code class="rounded bg-[rgb(var(--border)/0.4)] px-1.5 py-0.5 font-mono text-[11px]">{$t('providerCliSetupCmd')}</code>
+            </p>
+            {#if selectedPreset?.docs_url}
+              <a
+                href={selectedPreset.docs_url}
+                target="_blank"
+                rel="noopener"
+                class="inline-flex items-center gap-1 text-xs text-[rgb(var(--accent))] hover:underline"
+              >
+                {$t('providerDocs')} <ExternalLink size="10" />
+              </a>
+            {/if}
+          </div>
+        </div>
+
+        <!-- Optional paste field. Empty = rely on `claude login` creds. -->
+        <label class="block space-y-1.5 pt-1">
+          <span class="block text-xs font-semibold text-[rgb(var(--fg-muted))]">
+            {$t('providerCliPasteOptional')}
+          </span>
+          <div class="relative">
+            {#if showKey}
+              <input
+                class="input pr-20 font-mono text-xs"
+                type="text"
+                bind:value={key}
+                autocomplete="off"
+                spellcheck="false"
+                placeholder="sk-ant-oat01-…"
+              />
+            {:else}
+              <input
+                class="input pr-20 font-mono text-xs"
+                type="password"
+                bind:value={key}
+                autocomplete="off"
+                spellcheck="false"
+                placeholder="sk-ant-oat01-…"
+              />
+            {/if}
+            <button
+              type="button"
+              class="absolute inset-y-0 right-2 my-auto h-7 rounded px-2 text-[rgb(var(--fg-muted))] hover:text-[rgb(var(--fg))]"
+              onclick={toggleShow}
+              aria-label={showKey ? 'Hide key' : 'Show key'}
+            >
+              {#if showKey}<EyeOff size="14" />{:else}<Eye size="14" />{/if}
+            </button>
+          </div>
+          <p class="text-[11px] text-[rgb(var(--fg-muted))]">{$t('providerCliPasteHint')}</p>
+          {#if key && !validity.ok}
+            <p class="text-xs text-red-500">{validity.reason}</p>
+          {:else if key && validity.ok}
+            <p class="text-xs text-[rgb(var(--fg-muted))]">
+              {$t('providerKeyLooksGood')} {maskKey(key)}
+            </p>
+          {/if}
+        </label>
+      </div>
+    {/if}
   {/if}
 
   <!-- Test row -->
@@ -432,6 +501,7 @@
       class="btn-secondary"
       disabled={testing ||
         (requiresKey && !existingForSlug && !validity.ok) ||
+        keyEnteredButInvalid ||
         (requiresBaseUrl && !customBaseUrl)}
       onclick={runTest}
     >
@@ -462,7 +532,7 @@
   <div class="flex justify-end pt-2">
     <button
       class="btn-primary"
-      disabled={requiresKey && !existingForSlug && !validity.ok}
+      disabled={(requiresKey && !existingForSlug && !validity.ok) || keyEnteredButInvalid}
       onclick={next}
     >
       {$t('continue')}
