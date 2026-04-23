@@ -1,3 +1,73 @@
+<script module lang="ts">
+  /**
+   * Per-module state shared across every `<TimezoneCombobox>` instance:
+   *
+   * - `uidCounter` mints a unique DOM id per mount so multiple pickers on
+   *   the same page don't collide on `id="tz-listbox"` (wizard + settings
+   *   rendered together, unit-test harnesses that mount multiple, etc.).
+   * - `offsetCache` memoises the result of `Intl.DateTimeFormat(...).
+   *   formatToParts()` per IANA zone. The computation is ~0.5-2 ms per
+   *   zone; with ~420 zones the first offset query (`UTC+8` →
+   *   scan-all) used to spike the main thread. Caching across instances
+   *   means any later mount inherits the warmed map.
+   * - `warmOffsetCache(zones)` runs once (idempotent) on first mount
+   *   during `requestIdleCallback` if available, else a deferred
+   *   `setTimeout(0)`. User doesn't pay the cost up-front; the typing
+   *   path can then rely on an O(1) lookup per zone.
+   */
+  let uidCounter = 0;
+
+  const offsetCache = new Map<string, number | null>();
+  let offsetCacheWarmed = false;
+
+  function computeOffsetForZone(zone: string): number | null {
+    try {
+      const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: zone,
+        timeZoneName: 'shortOffset'
+      }).formatToParts(new Date());
+      const name = parts.find((p) => p.type === 'timeZoneName')?.value ?? '';
+      if (name === 'GMT' || name === 'UTC') return 0;
+      const m = name.match(/([+-])(\d{1,2})(?::?(\d{2}))?/);
+      if (!m) return null;
+      const sign = m[1] === '+' ? 1 : -1;
+      return sign * (parseInt(m[2], 10) * 60 + (m[3] ? parseInt(m[3], 10) : 0));
+    } catch {
+      return null;
+    }
+  }
+
+  export function zoneOffsetMinutes(zone: string): number | null {
+    const cached = offsetCache.get(zone);
+    if (cached !== undefined) return cached;
+    const result = computeOffsetForZone(zone);
+    offsetCache.set(zone, result);
+    return result;
+  }
+
+  export function warmOffsetCache(zones: readonly string[]): void {
+    if (offsetCacheWarmed) return;
+    offsetCacheWarmed = true;
+    const doWarm = () => {
+      for (const z of zones) {
+        if (!offsetCache.has(z)) offsetCache.set(z, computeOffsetForZone(z));
+      }
+    };
+    // Defer so the first paint ships before we spend ~100-500 ms on 420
+    // Intl calls. `requestIdleCallback` exists on Chromium (so in Tauri's
+    // WebKit2GTK / WebView2); Safari/WebKit doesn't yet, hence the
+    // fallback.
+    const idle = (globalThis as typeof globalThis & {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+    }).requestIdleCallback;
+    if (typeof idle === 'function') {
+      idle(doWarm, { timeout: 1500 });
+    } else {
+      setTimeout(doWarm, 0);
+    }
+  }
+</script>
+
 <script lang="ts">
   /**
    * Non-filtering timezone picker. HTML <datalist> hides unmatched entries —
@@ -22,6 +92,13 @@
 
   const zones = allTimezones();
 
+  // Per-instance DOM ids. `uidCounter` lives at module scope, so every
+  // combobox on the page gets a distinct listbox/option id — no ARIA
+  // collisions when the wizard and the settings pane share a viewport.
+  const uid = `tz-combo-${++uidCounter}`;
+  const listboxId = `${uid}-listbox`;
+  const optionId = (i: number): string => `${uid}-opt-${i}`;
+
   let hostEl: HTMLDivElement | undefined = $state();
   let inputEl: HTMLInputElement | undefined = $state();
   let listEl: HTMLUListElement | undefined = $state();
@@ -43,33 +120,6 @@
     const mins = m[3] ? parseInt(m[3], 10) : 0;
     if (hours > 14 || mins >= 60) return null;
     return sign * (hours * 60 + mins);
-  }
-
-  const offsetCache = new Map<string, number | null>();
-  function zoneOffsetMinutes(zone: string): number | null {
-    const cached = offsetCache.get(zone);
-    if (cached !== undefined) return cached;
-    let result: number | null = null;
-    try {
-      const parts = new Intl.DateTimeFormat('en-US', {
-        timeZone: zone,
-        timeZoneName: 'shortOffset'
-      }).formatToParts(new Date());
-      const name = parts.find((p) => p.type === 'timeZoneName')?.value ?? '';
-      if (name === 'GMT' || name === 'UTC') {
-        result = 0;
-      } else {
-        const m = name.match(/([+-])(\d{1,2})(?::?(\d{2}))?/);
-        if (m) {
-          const sign = m[1] === '+' ? 1 : -1;
-          result = sign * (parseInt(m[2], 10) * 60 + (m[3] ? parseInt(m[3], 10) : 0));
-        }
-      }
-    } catch {
-      result = null;
-    }
-    offsetCache.set(zone, result);
-    return result;
   }
 
   function score(query: string, zone: string): number {
@@ -164,7 +214,19 @@
     if (!hostEl.contains(e.target as Node)) open = false;
   }
 
+  /** Close when focus leaves the component entirely (Tab, Shift-Tab, or
+   *  clicking a focusable element elsewhere). `relatedTarget` is the
+   *  element that will receive focus next; when it lives inside the host
+   *  (picked option, input re-focus after pick) we keep the list open.
+   *  Mouse clicks on options fire `onmousedown` with preventDefault, so
+   *  focus stays on the input and this handler doesn't fight them. */
+  function onFocusOut(e: FocusEvent) {
+    const next = e.relatedTarget as Node | null;
+    if (!next || !hostEl?.contains(next)) open = false;
+  }
+
   onMount(() => {
+    warmOffsetCache(zones);
     document.addEventListener('mousedown', onDocumentDown);
     return () => document.removeEventListener('mousedown', onDocumentDown);
   });
@@ -198,7 +260,7 @@
   }
 </script>
 
-<div bind:this={hostEl} class="relative">
+<div bind:this={hostEl} class="relative" onfocusout={onFocusOut}>
   <input
     {id}
     bind:this={inputEl}
@@ -216,12 +278,13 @@
     role="combobox"
     aria-expanded={open}
     aria-autocomplete="list"
-    aria-controls="tz-listbox"
+    aria-controls={listboxId}
+    aria-activedescendant={open && activeIdx >= 0 ? optionId(activeIdx) : undefined}
   />
   {#if open}
     <ul
       bind:this={listEl}
-      id="tz-listbox"
+      id={listboxId}
       role="listbox"
       class="absolute left-0 right-0 z-20 mt-1 max-h-64 overflow-y-auto rounded-xl border
              border-[rgb(var(--border))] bg-[rgb(var(--bg-elev))] py-1 text-sm shadow-lg"
@@ -230,6 +293,7 @@
         {@const hl = highlight(z, value)}
         {@const active = i === activeIdx}
         <li
+          id={optionId(i)}
           role="option"
           aria-selected={active}
           onmousedown={(e) => {
