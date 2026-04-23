@@ -23,7 +23,7 @@ const initial: WizardState = {
   theme: 'auto',
   identity: { name: '', role: '', blurb: '' },
   priorities: [],
-  delivery: { email: '', timezone: 'UTC', language: 'en' },
+  delivery: { email: '', timezone: '', language: 'en' },
   claude: { has_key: false, tested: false, last_latency_ms: null },
   graph: { signed_in: false, display_name: '', upn: '' },
   connectivity: { ok: false, results: [] },
