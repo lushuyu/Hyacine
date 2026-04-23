@@ -143,13 +143,14 @@ def test(  # noqa: C901 — mirrors providers.api_format branches; keeping a sin
 
 
 def _probe_anthropic_cli(*, api_key: str, model: str) -> dict[str, Any]:
-    """Invoke ``claude -p "ping"`` with the given OAuth token.
+    """Invoke ``claude -p "ping"`` using an optional OAuth token or existing CLI credentials.
 
-    ``CLAUDE_CODE_OAUTH_TOKEN`` is preferred but not required: when the user
-    hasn't pasted a long-lived token yet, ``claude`` reads the credentials
-    written by ``claude login`` (``~/.claude/`` or platform keychain). Either
-    path is a legitimate "configured" state, so we let the CLI resolve auth
-    and surface whatever error comes back if neither source has creds —
+    The ``api_key`` parameter is optional. When non-empty we export it as
+    ``CLAUDE_CODE_OAUTH_TOKEN`` for the subprocess; when empty, ``claude``
+    falls back to its own credential store (populated by ``claude login``
+    at ``~/.claude/`` or the platform keychain). Either path is a
+    legitimate "configured" state, so we let the CLI resolve auth and
+    surface whatever error comes back if neither source has creds —
     rather than pre-failing with a confusing "skipped" verdict.
 
     Genuine blockers (the ``claude`` binary itself being absent) still fail

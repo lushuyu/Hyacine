@@ -61,6 +61,11 @@
   const requiresKey = $derived(effectiveFormat !== 'anthropic_cli' && !isLocalProvider);
   const requiresBaseUrl = $derived(selectedId === 'custom');
 
+  // Covers "key is optional, but if entered it must be valid". Today this only
+  // fires on the anthropic_cli paste field — users who leave it blank rely on
+  // `claude login`; users who paste must paste something `isClaudeKey` accepts.
+  const keyEnteredButInvalid = $derived(key.trim() !== '' && !validity.ok);
+
   // Keychain slug for the secret. Preset providers use their own id;
   // custom endpoints share a single stable slug so the pipeline's
   // resolve() helper can always find the key.
@@ -127,6 +132,13 @@
     // the active provider's keychain slot at spawn time.
     const usingStored = existingForSlug && !key;
     if (!usingStored && requiresKey && !validity.ok) {
+      pushToast('error', `Invalid key: ${validity.reason}`);
+      return;
+    }
+    // CLI + local providers make the key optional, but if the user *did*
+    // type something it must be a valid claude key — otherwise the probe
+    // would go out with obvious junk. Block early.
+    if (keyEnteredButInvalid) {
       pushToast('error', `Invalid key: ${validity.reason}`);
       return;
     }
@@ -489,6 +501,7 @@
       class="btn-secondary"
       disabled={testing ||
         (requiresKey && !existingForSlug && !validity.ok) ||
+        keyEnteredButInvalid ||
         (requiresBaseUrl && !customBaseUrl)}
       onclick={runTest}
     >
@@ -519,7 +532,7 @@
   <div class="flex justify-end pt-2">
     <button
       class="btn-primary"
-      disabled={requiresKey && !existingForSlug && !validity.ok}
+      disabled={(requiresKey && !existingForSlug && !validity.ok) || keyEnteredButInvalid}
       onclick={next}
     >
       {$t('continue')}

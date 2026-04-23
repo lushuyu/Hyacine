@@ -71,7 +71,10 @@ impl SidecarState {
         let env = build_sidecar_env();
 
         // Prefer the bundled sidecar binary; fall back to `python -m hyacine.ipc`
-        // during development or on installers that ship without a Python runtime.
+        // during development or on installers that ship without the bundled
+        // sidecar binary. The fallback itself requires Python on PATH — when
+        // that's also missing, the combined error message at the bottom names
+        // both failed attempts and points at `pip install hyacine`.
         //
         // Tauri 2's `app.shell().sidecar(name)` ALWAYS returns `Ok(cmd)` — it
         // constructs a Command pointing at `{resource_dir}/hyacine-ipc` without
