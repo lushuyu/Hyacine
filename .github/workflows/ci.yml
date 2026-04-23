@@ -159,6 +159,22 @@ jobs:
       # PyInstaller against it. The resulting binary lands in
       # `desktop/src-tauri/binaries/` with a target-triple suffix so Tauri's
       # `externalBin` resolution matches the right file on each host.
+
+      # cryptography 46.x publishes no win_arm64 binary wheel yet, so uv
+      # falls through to a source build. That pulls in openssl-sys, which
+      # needs system OpenSSL. Install it via the vcpkg preinstalled on GH
+      # runners and point the Rust build at it. Scoped to this runner only
+      # — the other platforms all hit a prebuilt wheel.
+      - name: Install OpenSSL (Windows on ARM)
+        if: matrix.os == 'windows-11-arm'
+        shell: pwsh
+        run: |
+          vcpkg install --triplet arm64-windows-static openssl
+          $openssl_root = "$env:VCPKG_INSTALLATION_ROOT\installed\arm64-windows-static"
+          echo "OPENSSL_DIR=$openssl_root" >> $env:GITHUB_ENV
+          echo "OPENSSL_STATIC=1" >> $env:GITHUB_ENV
+          echo "OPENSSL_NO_VENDOR=1" >> $env:GITHUB_ENV
+
       - name: Sync Python deps for sidecar
         run: uv sync --python 3.12
 
