@@ -3,6 +3,7 @@
   import { goto } from '$app/navigation';
   import { onMount } from 'svelte';
   import { ipc } from '$lib/ipc';
+  import { t, type MsgKey } from '$lib/i18n';
   import { LayoutDashboard, FileText, List, Settings, Play, Dot } from 'lucide-svelte';
   import { fade } from 'svelte/transition';
 
@@ -12,11 +13,11 @@
   let status = $state<Status>('unknown');
   let running = $state(false);
 
-  const tabs = [
-    { path: '/app/dashboard/', label: 'Dashboard', icon: LayoutDashboard },
-    { path: '/app/prompt/', label: 'Prompt Lab', icon: FileText },
-    { path: '/app/rules/', label: 'Rules', icon: List },
-    { path: '/app/settings/', label: 'Settings', icon: Settings }
+  const tabs: { path: string; labelKey: MsgKey; icon: typeof LayoutDashboard }[] = [
+    { path: '/app/dashboard/', labelKey: 'navDashboard', icon: LayoutDashboard },
+    { path: '/app/prompt/', labelKey: 'navPromptLab', icon: FileText },
+    { path: '/app/rules/', labelKey: 'navRules', icon: List },
+    { path: '/app/settings/', labelKey: 'navSettings', icon: Settings }
   ];
 
   onMount(async () => {
@@ -96,7 +97,7 @@
             size="16"
             color={active ? 'rgb(139 92 246)' : 'rgb(var(--fg-muted))'}
           />
-          {tab.label}
+          {$t(tab.labelKey)}
         </button>
       {/each}
     </nav>
@@ -104,17 +105,17 @@
     <div class="border-t border-[rgb(var(--border))] pt-3 space-y-2">
       <button class="btn-primary w-full" disabled={running} onclick={runNow}>
         <Play size="14" />
-        {running ? 'Running…' : 'Run now'}
+        {running ? $t('runningNow') : $t('runNow')}
       </button>
       <div class="flex items-center gap-1.5 px-1 text-xs text-[rgb(var(--fg-muted))]">
         <Dot size="18" class={statusColor} strokeWidth="6" />
         {status === 'ok'
-          ? 'Last run succeeded'
+          ? $t('lastRunOk')
           : status === 'err'
-            ? 'Last run failed'
+            ? $t('lastRunFail')
             : status === 'warn'
-              ? 'Warnings'
-              : 'No runs yet'}
+              ? $t('lastRunWarn')
+              : $t('lastRunNone')}
       </div>
     </div>
   </aside>

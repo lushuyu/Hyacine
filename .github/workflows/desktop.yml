@@ -95,10 +95,12 @@ jobs:
         run: npx --yes @tauri-apps/cli icon static/favicon.svg
 
       # Stamp a per-run version so each CI bundle has a unique identifier.
-      # We deliberately keep the version as X.Y.Z (no semver pre-release
-      # suffix, no '+build' metadata) because Windows MSI bundlers require
-      # exactly three numeric components ≤ 65535. On tag pushes matching
-      # vX.Y.Z we use the tag's version verbatim.
+      # Shape: <major>.<minor>.<run_number> — major/minor come from the
+      # checked-in manifest, patch tracks the monotonic CI run number so
+      # every pushed bundle can be distinguished. Three-component numeric
+      # keeps Windows MSI bundlers happy (no semver pre-release suffix,
+      # no '+build' metadata). On tag pushes matching vX.Y.Z we use the
+      # tag's version verbatim.
       - name: Stamp build version
         shell: bash
         run: |
@@ -106,10 +108,9 @@ jobs:
           if [[ "${GITHUB_REF:-}" == refs/tags/v* ]]; then
             VERSION="${GITHUB_REF#refs/tags/v}"
           else
-            # 0.<major>.<run>: minor tracks the manifest's current major,
-            # patch tracks the monotonic CI run number.
-            MAJOR=$(jq -r .version src-tauri/tauri.conf.json | cut -d. -f2)
-            VERSION="0.${MAJOR}.${GITHUB_RUN_NUMBER:-0}"
+            MAJOR=$(jq -r .version src-tauri/tauri.conf.json | cut -d. -f1)
+            MINOR=$(jq -r .version src-tauri/tauri.conf.json | cut -d. -f2)
+            VERSION="${MAJOR}.${MINOR}.${GITHUB_RUN_NUMBER:-0}"
           fi
           echo "Stamping version: $VERSION"
 

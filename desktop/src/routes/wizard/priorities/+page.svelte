@@ -70,7 +70,7 @@
       {/each}
       {#if tags.length === 0}
         <span class="text-sm text-[rgb(var(--fg-muted))]">
-          Pick a few suggestions below, or type your own.
+          {$t('prioritiesEmpty')}
         </span>
       {/if}
     </div>
@@ -82,7 +82,7 @@
       class="input flex-1"
       bind:value={draft}
       onkeydown={keydown}
-      placeholder="Add a custom signal — press Enter"
+      placeholder={$t('prioritiesAddPlaceholder')}
     />
     <button class="btn-secondary" onclick={add} aria-label="add">
       <Plus size="16" />
@@ -92,7 +92,7 @@
   <!-- suggestions -->
   <section class="space-y-2">
     <h2 class="text-xs font-semibold uppercase tracking-wider text-[rgb(var(--fg-muted))]">
-      Suggested
+      {$t('prioritiesSuggested')}
     </h2>
     <div class="flex flex-wrap gap-2">
       {#each suggested as s (s)}

@@ -26,7 +26,7 @@
       ...w,
       delivery: { email, timezone: tz, language: outLang }
     }));
-    await goto('/wizard/claude/');
+    await goto('/wizard/provider/');
   }
 </script>
 
@@ -50,7 +50,7 @@
         placeholder="alice@example.com"
       />
       {#if email && !emailOk}
-        <p class="mt-1 text-xs text-red-500">Looks like that isn't a valid email.</p>
+        <p class="mt-1 text-xs text-red-500">{$t('deliveryEmailInvalid')}</p>
       {/if}
     </label>
 
@@ -65,7 +65,7 @@
         {/each}
       </datalist>
       {#if tz && !tzOk}
-        <p class="mt-1 text-xs text-red-500">Unknown timezone.</p>
+        <p class="mt-1 text-xs text-red-500">{$t('deliveryTzInvalid')}</p>
       {/if}
     </label>
 
@@ -82,11 +82,11 @@
 
   <!-- fake "email header" preview -->
   <div class="card p-4 font-mono text-xs text-[rgb(var(--fg-muted))] space-y-1">
-    <div><span class="text-[rgb(var(--fg))]">To:</span> {email || '—'}</div>
-    <div><span class="text-[rgb(var(--fg))]">From:</span> Hyacine &lt;via your Outlook&gt;</div>
-    <div><span class="text-[rgb(var(--fg))]">Subject:</span> Your briefing — {tz}</div>
+    <div><span class="text-[rgb(var(--fg))]">{$t('deliveryPreviewTo')}:</span> {email || '—'}</div>
+    <div><span class="text-[rgb(var(--fg))]">{$t('deliveryPreviewFrom')}:</span> {$t('deliveryPreviewFromVal')}</div>
+    <div><span class="text-[rgb(var(--fg))]">{$t('deliveryPreviewSubject')}:</span> {$t('deliveryPreviewSubjectVal')} {tz}</div>
     <div>
-      <span class="text-[rgb(var(--fg))]">Language:</span>
+      <span class="text-[rgb(var(--fg))]">{$t('deliveryPreviewLanguage')}:</span>
       {outLang === 'zh-CN' ? '中文' : 'English'}
     </div>
   </div>

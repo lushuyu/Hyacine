@@ -13,7 +13,7 @@
     '/wizard/identity/',
     '/wizard/priorities/',
     '/wizard/delivery/',
-    '/wizard/claude/',
+    '/wizard/provider/',
     '/wizard/graph/',
     '/wizard/connectivity/',
     '/wizard/preview/',

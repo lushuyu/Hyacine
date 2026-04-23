@@ -9,7 +9,14 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from hyacine.ipc.handlers import config_h, connectivity_h, graph_h, pipeline_h, system_h
+from hyacine.ipc.handlers import (
+    config_h,
+    connectivity_h,
+    graph_h,
+    pipeline_h,
+    providers_h,
+    system_h,
+)
 
 
 def build_handlers(
@@ -41,4 +48,8 @@ def build_handlers(
         "pipeline.dry_run": lambda **kw: pipeline_h.dry_run(emit=emit, log=log, **kw),
         "pipeline.run": lambda **kw: pipeline_h.run(emit=emit, log=log, **kw),
         "pipeline.history": pipeline_h.history,
+        # providers (multi-LLM catalogue)
+        "providers.list": providers_h.list_providers,
+        "providers.current": providers_h.current_provider,
+        "providers.test": lambda **kw: providers_h.test(emit=emit, **kw),
     }

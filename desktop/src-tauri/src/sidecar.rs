@@ -72,12 +72,19 @@ impl SidecarState {
 
         // Prefer the bundled sidecar binary; fall back to `python -m hyacine.ipc`
         // during development so you don't need to build the sidecar to iterate.
+        //
+        // The error messages here need to be specific — CI-built installers
+        // ship without a bundled Python runtime (see the externalBin note in
+        // tauri.conf.json), so a user on a clean machine will hit the
+        // fallback path with no Python on PATH. Tell them exactly what we
+        // tried and how to fix it.
         let sidecar = app.shell().sidecar("hyacine-ipc");
         let (mut rx, child) = match sidecar {
-            Ok(cmd) => cmd
-                .envs(env.clone())
-                .spawn()
-                .map_err(|e| AppError::Sidecar(e.to_string()))?,
+            Ok(cmd) => cmd.envs(env.clone()).spawn().map_err(|e| {
+                AppError::Sidecar(format!(
+                    "bundled sidecar `hyacine-ipc` failed to spawn: {e}"
+                ))
+            })?,
             Err(_) => {
                 let python = which_python();
                 app.shell()
@@ -85,7 +92,15 @@ impl SidecarState {
                     .args(["-m", "hyacine.ipc"])
                     .envs(env)
                     .spawn()
-                    .map_err(|e| AppError::Sidecar(format!("fallback python: {e}")))?
+                    .map_err(|e| {
+                        AppError::Sidecar(format!(
+                            "Python sidecar unavailable. Tried `{python} -m hyacine.ipc`: {e}. \
+                             The bundled installer ships without a Python runtime yet — \
+                             install Python 3.11+ and run `pip install hyacine` (or clone \
+                             the repo and `uv sync`) to use connectivity testing and \
+                             pipeline runs. The wizard picker still works offline."
+                        ))
+                    })?
             }
         };
 
@@ -276,25 +291,103 @@ fn which_python() -> &'static str {
     }
 }
 
+/// Legacy priority list — only consulted when the active provider's slug
+/// has no stored secret. Preserves the pre-provider-registry behaviour so
+/// upgrades from older installs don't lose the user's token.
+const LEGACY_SLUG_CANDIDATES: &[&str] = &["claude-code-oauth", "claude"];
+
 /// Build the env var map the sidecar process inherits on spawn.
 ///
-/// Matches `hyacine.llm.claude_code.build_env`: if the user stored a token
-/// under the `claude` keychain slug we forward it as `CLAUDE_CODE_OAUTH_TOKEN`,
-/// and we unset `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` so they can't
-/// silently override the OAuth token.
+/// Two env vars carry credentials to the Python backends:
+///   * ``CLAUDE_CODE_OAUTH_TOKEN`` — ``anthropic_cli`` backend (authentic
+///     ates the local ``claude`` binary through OAuth).
+///   * ``HYACINE_LLM_API_KEY`` — generic slot read by ``anthropic_http`` +
+///     ``openai_chat`` backends.
+///
+/// We first ask the config which provider is active and fetch *that*
+/// slug's secret. Only when it's empty do we scan the legacy list, so a
+/// user with multiple providers stored can still switch between them
+/// without the sidecar exporting the wrong one.
+///
+/// Anthropic's scrubbing contract is honoured throughout:
+/// ``ANTHROPIC_API_KEY`` / ``ANTHROPIC_AUTH_TOKEN`` are removed so stale
+/// shell env can't silently override whatever we just set.
 fn build_sidecar_env() -> std::collections::HashMap<String, String> {
     let mut env: std::collections::HashMap<String, String> = std::env::vars().collect();
-    if let Ok(Some(token)) = crate::secrets::get("claude") {
-        let trimmed = token.trim().to_string();
-        if !trimmed.is_empty() {
-            env.insert("CLAUDE_CODE_OAUTH_TOKEN".into(), trimmed.clone());
-            // Keep the HYACINE_* fallback in sync so documented escape hatch works.
-            env.insert("HYACINE_CLAUDE_CODE_OAUTH_TOKEN".into(), trimmed);
-        }
+    let active = read_active_provider_from_config();
+
+    // Try the active provider's slug first, then the legacy fallback list.
+    let mut candidates: Vec<(String, bool /* is_cli */)> = Vec::new();
+    if let Some((slug, is_cli)) = active {
+        candidates.push((slug, is_cli));
     }
+    for legacy in LEGACY_SLUG_CANDIDATES {
+        candidates.push(((*legacy).to_string(), true)); // legacy slugs always CLI-auth
+    }
+
+    for (slug, is_cli) in candidates {
+        let Ok(Some(token)) = crate::secrets::get(&slug) else { continue };
+        let trimmed = token.trim().to_string();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if is_cli {
+            env.insert("CLAUDE_CODE_OAUTH_TOKEN".into(), trimmed.clone());
+            env.insert("HYACINE_CLAUDE_CODE_OAUTH_TOKEN".into(), trimmed.clone());
+        } else {
+            env.insert("HYACINE_LLM_API_KEY".into(), trimmed.clone());
+        }
+        tracing::info!(slug = slug.as_str(), cli = is_cli, "loaded sidecar credential from keychain");
+        break;
+    }
+
     env.remove("ANTHROPIC_API_KEY");
     env.remove("ANTHROPIC_AUTH_TOKEN");
     env
+}
+
+/// Parse just the two keys we care about out of the YAML config so the
+/// spawner knows which keychain slug to load for the active provider.
+/// Returns ``Some((slug, is_cli))`` when a provider is resolvable.
+fn read_active_provider_from_config() -> Option<(String, bool)> {
+    let repo_root = std::env::var("HYACINE_REPO_ROOT").ok()
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::current_dir().ok())?;
+    let path = repo_root.join("config").join("config.yaml");
+    let body = std::fs::read_to_string(&path).ok()?;
+
+    // Tiny line-based parser — the config is flat, we only need two keys.
+    // Avoids pulling serde_yaml into the binary just for this.
+    let mut provider_id: Option<String> = None;
+    let mut api_format: Option<String> = None;
+    for raw in body.lines() {
+        let line = raw.trim();
+        if let Some(val) = line.strip_prefix("llm_provider:") {
+            provider_id = Some(strip_yaml_scalar(val));
+        } else if let Some(val) = line.strip_prefix("llm_api_format:") {
+            api_format = Some(strip_yaml_scalar(val));
+        }
+    }
+
+    let id = provider_id.unwrap_or_default();
+    let fmt = api_format.unwrap_or_default();
+
+    if !id.is_empty() {
+        let is_cli = matches!(id.as_str(), "claude-code-oauth");
+        return Some((id, is_cli));
+    }
+    if !fmt.is_empty() {
+        let is_cli = fmt == "anthropic_cli";
+        return Some(("custom".to_string(), is_cli));
+    }
+    None
+}
+
+fn strip_yaml_scalar(raw: &str) -> String {
+    let s = raw.trim();
+    let s = s.trim_start_matches('"').trim_end_matches('"');
+    let s = s.trim_start_matches('\'').trim_end_matches('\'');
+    s.to_string()
 }
 
 #[allow(dead_code)]

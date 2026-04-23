@@ -13,13 +13,15 @@ Contract:
 """
 from __future__ import annotations
 
+import os
 import traceback
 import zoneinfo
 from datetime import UTC, datetime, timedelta
 
 from hyacine.config import Settings, YamlConfig, load_yaml_config
 from hyacine.db import Run, Watermark, init_db, session_scope
-from hyacine.llm.claude_code import summarize
+from hyacine.llm import summarize
+from hyacine.llm.providers import resolve as resolve_provider
 from hyacine.models import FetchResult, RunRecord, RunStatus
 
 # Module-level settings singletons — overridable for tests via monkeypatch
@@ -215,9 +217,27 @@ def run_pipeline(now_utc: datetime | None = None) -> RunRecord:
     json_input = fetch_result.model_dump_json()
 
     try:
+        # Build the active provider from config. resolve() handles three
+        # cases uniformly: built-in preset by id, custom-endpoint
+        # (llm_api_format + llm_base_url in config), and stale/unknown id
+        # (falls back to the default preset).
+        provider = resolve_provider(
+            provider_id=cfg.llm_provider,
+            api_format=cfg.llm_api_format,
+            base_url=cfg.llm_base_url,
+            model=cfg.llm_model,
+        )
+        # Providers that authenticate via an API key expect the secret in
+        # `HYACINE_LLM_API_KEY` (the Rust parent populates this from the
+        # keychain slot matching the active provider). The CLI provider
+        # uses its own env conventions (CLAUDE_CODE_OAUTH_TOKEN) handled
+        # inside claude_code.summarize.
+        api_key = os.environ.get("HYACINE_LLM_API_KEY", "")
         markdown = summarize(
             json_input,
             settings.prompt_path,
+            provider=provider,
+            api_key=api_key,
             model=cfg.llm_model,
             timeout_seconds=cfg.llm_timeout_seconds,
         )

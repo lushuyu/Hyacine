@@ -43,23 +43,23 @@
       <Check size="32" />
     </div>
     <h1 class="text-3xl font-semibold">{$t('doneTitle')}</h1>
-    <p class="text-sm text-[rgb(var(--fg-muted))]">
-      Hyacine will send you a briefing every weekday morning.
-    </p>
+    <p class="text-sm text-[rgb(var(--fg-muted))]">{$t('doneSubtitle')}</p>
   </div>
 
   <div class="card p-5 space-y-5 text-left">
     <div class="flex items-center justify-between">
       <div>
-        <div class="text-sm font-medium">Daily run time</div>
-        <div class="text-xs text-[rgb(var(--fg-muted))]">Local time, {$wizard.delivery.timezone}</div>
+        <div class="text-sm font-medium">{$t('doneRunTime')}</div>
+        <div class="text-xs text-[rgb(var(--fg-muted))]">
+          {$t('doneRunTimeHint')}, {$wizard.delivery.timezone}
+        </div>
       </div>
       <input class="input w-32 text-center" type="time" bind:value={runTime} />
     </div>
     <label class="flex items-center justify-between cursor-pointer">
       <div>
-        <div class="text-sm font-medium">Launch at login</div>
-        <div class="text-xs text-[rgb(var(--fg-muted))]">Recommended so scheduling works</div>
+        <div class="text-sm font-medium">{$t('doneLaunchAtLogin')}</div>
+        <div class="text-xs text-[rgb(var(--fg-muted))]">{$t('doneLaunchAtLoginHint')}</div>
       </div>
       <input
         type="checkbox"
@@ -69,8 +69,8 @@
     </label>
     <label class="flex items-center justify-between cursor-pointer">
       <div>
-        <div class="text-sm font-medium">Show in system tray</div>
-        <div class="text-xs text-[rgb(var(--fg-muted))]">Quick access to run now & logs</div>
+        <div class="text-sm font-medium">{$t('doneTray')}</div>
+        <div class="text-xs text-[rgb(var(--fg-muted))]">{$t('doneTrayHint')}</div>
       </div>
       <input
         type="checkbox"

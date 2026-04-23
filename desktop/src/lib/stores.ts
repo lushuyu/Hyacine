@@ -48,6 +48,16 @@ export const toast = writable<{ id: number; kind: 'info' | 'error' | 'success'; 
   []
 );
 
+/**
+ * Global sidecar error surface. The root layout populates this on
+ * startup if `ipc.startSidecar()` throws (CI-built installer without a
+ * Python runtime, `hyacine` package not installed, etc.). Wizard steps
+ * and the main app read it to show a banner explaining why RPC calls
+ * might be failing — otherwise users just see opaque "not started"
+ * errors deep inside every feature that needs the sidecar.
+ */
+export const sidecarError = writable<string>('');
+
 let tid = 0;
 export function pushToast(kind: 'info' | 'error' | 'success', msg: string, ttl = 3500) {
   const id = ++tid;
