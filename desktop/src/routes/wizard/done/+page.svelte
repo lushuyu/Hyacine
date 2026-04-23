@@ -6,18 +6,19 @@
   import { t } from '$lib/i18n';
   import confetti from 'canvas-confetti';
   import { Check } from 'lucide-svelte';
+  import Pansy from '$lib/brand/Pansy.svelte';
 
   let runTime = $state($wizard.schedule.run_time);
   let startup = $state($wizard.schedule.startup);
   let tray = $state($wizard.schedule.tray);
 
   onMount(() => {
-    // Subtle confetti — a single burst.
+    // Aurora-toned confetti — pink, lavender, sky, mint, gold.
     confetti({
-      particleCount: 60,
-      spread: 72,
+      particleCount: 80,
+      spread: 80,
       origin: { y: 0.4 },
-      colors: ['#a78bfa', '#8b5cf6', '#c4b5fd', '#ede9fe']
+      colors: ['#F4B6C9', '#C9B8F0', '#A890E0', '#A8D5F5', '#E8C77A', '#BDE3C8']
     });
   });
 
@@ -25,8 +26,6 @@
     wizard.update((w) => ({ ...w, schedule: { run_time: runTime, startup, tray } }));
     await ipc.config.write({ run_time: runTime });
     try {
-      // ui_set_startup is a Rust Tauri command, not a JSON-RPC method on the
-      // Python sidecar — route via ipc.cmd so it doesn't hit METHOD_NOT_FOUND.
       await ipc.cmd('ui_set_startup', { enabled: startup });
     } catch {
       /* non-fatal */
@@ -35,18 +34,23 @@
   }
 </script>
 
-<div class="space-y-8 animate-fade-in text-center">
-  <div class="flex flex-col items-center gap-3">
-    <div
-      class="flex h-16 w-16 items-center justify-center rounded-full bg-green-500/20 text-green-500"
-    >
-      <Check size="32" />
+<div class="animate-fade-in space-y-8 text-center">
+  <div class="flex flex-col items-center gap-4">
+    <div class="relative">
+      <Pansy size={72} />
+      <div
+        class="absolute -bottom-1 -right-1 flex h-8 w-8 items-center justify-center rounded-full bg-white shadow-pansy-sm"
+      >
+        <Check size="16" class="text-[rgb(var(--accent))]" />
+      </div>
     </div>
-    <h1 class="text-3xl font-semibold">{$t('doneTitle')}</h1>
+    <h1 class="serif text-3xl font-semibold text-[rgb(var(--fg))]">
+      {$t('doneTitle')}
+    </h1>
     <p class="text-sm text-[rgb(var(--fg-muted))]">{$t('doneSubtitle')}</p>
   </div>
 
-  <div class="card p-5 space-y-5 text-left">
+  <div class="card space-y-5 p-5 text-left">
     <div class="flex items-center justify-between">
       <div>
         <div class="text-sm font-medium">{$t('doneRunTime')}</div>
@@ -56,7 +60,7 @@
       </div>
       <input class="input w-32 text-center" type="time" bind:value={runTime} />
     </div>
-    <label class="flex items-center justify-between cursor-pointer">
+    <label class="flex cursor-pointer items-center justify-between">
       <div>
         <div class="text-sm font-medium">{$t('doneLaunchAtLogin')}</div>
         <div class="text-xs text-[rgb(var(--fg-muted))]">{$t('doneLaunchAtLoginHint')}</div>
@@ -67,7 +71,7 @@
         class="h-5 w-5 rounded border-[rgb(var(--border))] accent-brand-500"
       />
     </label>
-    <label class="flex items-center justify-between cursor-pointer">
+    <label class="flex cursor-pointer items-center justify-between">
       <div>
         <div class="text-sm font-medium">{$t('doneTray')}</div>
         <div class="text-xs text-[rgb(var(--fg-muted))]">{$t('doneTrayHint')}</div>

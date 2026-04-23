@@ -220,9 +220,9 @@
   }
 </script>
 
-<div class="space-y-6 animate-fade-in">
+<div class="animate-fade-in space-y-6">
   <header class="space-y-2">
-    <h1 class="text-2xl font-semibold">{$t('providerTitle')}</h1>
+    <h1 class="serif text-2xl font-semibold text-[rgb(var(--fg))]">{$t('providerTitle')}</h1>
     <p class="text-sm text-[rgb(var(--fg-muted))]">{$t('providerSubtitle')}</p>
   </header>
 
@@ -257,13 +257,12 @@
             <div class="grid grid-cols-2 gap-2">
               {#each grouped[cat] as p (p.id)}
                 <button
-                  class="card flex items-start gap-3 p-3 text-left transition-all"
-                  class:ring-2={selectedId === p.id}
-                  class:ring-brand-400={selectedId === p.id}
+                  class="pick-card flex items-start gap-3 !p-3 text-left"
+                  class:pick-card-selected={selectedId === p.id}
                   onclick={() => onPickPreset(p.id)}
                 >
                   <span
-                    class="mt-1 inline-block h-3 w-3 rounded-full flex-shrink-0"
+                    class="mt-1 inline-block h-3 w-3 flex-shrink-0 rounded-full"
                     style:background-color={p.icon_color || '#94a3b8'}
                   ></span>
                   <span class="flex-1 space-y-0.5">
@@ -285,12 +284,11 @@
           {$t('providerCategoryCustom')}
         </h2>
         <button
-          class="card flex items-start gap-3 p-3 text-left transition-all w-full"
-          class:ring-2={selectedId === 'custom'}
-          class:ring-brand-400={selectedId === 'custom'}
+          class="pick-card flex w-full items-start gap-3 !p-3 text-left"
+          class:pick-card-selected={selectedId === 'custom'}
           onclick={() => onPickPreset('custom')}
         >
-          <Sparkles size="14" class="mt-1 text-brand-500 flex-shrink-0" />
+          <Sparkles size="14" class="mt-1 flex-shrink-0 text-[rgb(var(--accent))]" />
           <span class="flex-1">
             <span class="block text-sm font-medium">{$t('providerCustom')}</span>
             <span class="block text-[11px] text-[rgb(var(--fg-muted))]">
@@ -303,10 +301,14 @@
   {/if}
 
   <!-- Privacy notice -->
-  <div class="card flex gap-3 p-4 border-brand-400/40 bg-brand-50/30 dark:bg-brand-900/10">
-    <ShieldCheck size="20" class="mt-0.5 flex-shrink-0 text-brand-500" />
+  <div
+    class="card flex gap-3 p-4"
+    style:background-image="linear-gradient(135deg, rgba(201,184,240,0.18) 0%, rgba(232,155,180,0.10) 100%)"
+    style:border-color="rgb(var(--accent-soft) / 0.55)"
+  >
+    <ShieldCheck size="20" class="mt-0.5 flex-shrink-0 text-[rgb(var(--accent))]" />
     <div class="text-sm leading-relaxed">
-      <strong class="block mb-1">{$t('providerPrivacyHeader')}</strong>
+      <strong class="mb-1 block">{$t('providerPrivacyHeader')}</strong>
       <p class="text-[rgb(var(--fg-muted))]">{$t('providerPrivacy')}</p>
     </div>
   </div>
@@ -349,7 +351,7 @@
   {#if requiresKey}
     {#if existingForSlug}
       <div class="card flex items-center gap-3 p-4">
-        <Lock size="18" class="text-brand-500" />
+        <Lock size="18" class="text-[rgb(var(--accent))]" />
         <div class="flex-1">
           <div class="text-sm font-medium">{$t('providerKeyStored')}</div>
           <div class="text-xs text-[rgb(var(--fg-muted))]">{$t('providerKeyStoredNote')} {slug}</div>
@@ -399,7 +401,7 @@
     {/if}
   {:else if effectiveFormat === 'anthropic_cli'}
     <div class="card flex items-start gap-3 p-4 text-sm">
-      <Sparkles size="16" class="mt-0.5 text-brand-500" />
+      <Sparkles size="16" class="mt-0.5 text-[rgb(var(--accent))]" />
       <div class="space-y-1">
         <div class="font-medium">
           {$t('providerCliHeader')}
@@ -415,7 +417,7 @@
             href={selectedPreset.docs_url}
             target="_blank"
             rel="noopener"
-            class="inline-flex items-center gap-1 text-xs text-brand-500 hover:underline"
+            class="inline-flex items-center gap-1 text-xs text-[rgb(var(--accent))] hover:underline"
           >
             {$t('providerDocs')} <ExternalLink size="10" />
           </a>
