@@ -47,11 +47,14 @@ CI matrix covers:
 | Runner             | Target triple                  |
 | ------------------ | ------------------------------ |
 | `macos-latest`     | `aarch64-apple-darwin`         |
-| `macos-13`         | `x86_64-apple-darwin`          |
 | `windows-latest`   | `x86_64-pc-windows-msvc`       |
 | `windows-11-arm`   | `aarch64-pc-windows-msvc`      |
 | `ubuntu-22.04`     | `x86_64-unknown-linux-gnu`     |
 | `ubuntu-24.04-arm` | `aarch64-unknown-linux-gnu`    |
+
+Intel Mac (`x86_64-apple-darwin`) isn't in the matrix — the macos-13
+runner pool is too saturated for reliable CI. Intel users can run the
+Apple Silicon bundle via Rosetta.
 
 Cross-arch PyInstaller builds aren't supported — each runner produces
 the binary for its own host.

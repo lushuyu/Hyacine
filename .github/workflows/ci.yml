@@ -71,12 +71,10 @@ jobs:
             artifact-glob: |
               desktop/src-tauri/target/*/release/bundle/dmg/*.dmg
               desktop/src-tauri/target/*/release/bundle/macos/*.app.tar.gz
-          # Intel Mac — macos-13 is the last GHA runner on Intel silicon.
-          - os: macos-13
-            target: x86_64-apple-darwin
-            artifact-glob: |
-              desktop/src-tauri/target/*/release/bundle/dmg/*.dmg
-              desktop/src-tauri/target/*/release/bundle/macos/*.app.tar.gz
+          # Intel Mac (macos-13) deliberately dropped: the runner pool is
+          # saturated enough that jobs sit queued for 30–60 min on every
+          # push, and x86_64 Mac users can run the Apple Silicon bundle via
+          # Rosetta if needed.
           # x86_64 Windows
           - os: windows-latest
             target: x86_64-pc-windows-msvc
