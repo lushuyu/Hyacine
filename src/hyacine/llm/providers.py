@@ -151,10 +151,14 @@ BUILTIN_PRESETS: tuple[Provider, ...] = (
         category="official",
         api_format="openai_chat",
         base_url="https://api.openai.com/v1",
-        default_model="gpt-4.1-mini",
+        default_model="gpt-4.1",
         secret_slug="openai",
         docs_url="https://platform.openai.com/api-keys",
         icon_color="#10b981",
+        # Curated shortlist. When the user wants something outside it, they
+        # can either type directly (UI falls back to a free-form input when
+        # the typed value isn't in the list) or switch to "Custom" and
+        # supply any model string.
         models=("gpt-4.1", "gpt-4.1-mini", "gpt-4o", "gpt-4o-mini"),
     ),
     Provider(
@@ -167,6 +171,12 @@ BUILTIN_PRESETS: tuple[Provider, ...] = (
         secret_slug="groq",
         docs_url="https://console.groq.com/keys",
         icon_color="#f97316",
+        models=(
+            "llama-3.3-70b-versatile",
+            "llama-3.1-8b-instant",
+            "mixtral-8x7b-32768",
+            "gemma2-9b-it",
+        ),
     ),
     Provider(
         id="ollama-local",
