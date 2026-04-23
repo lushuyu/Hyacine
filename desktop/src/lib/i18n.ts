@@ -148,6 +148,8 @@ const messages = {
     graphSignedIn: 'Signed in',
     graphCancelled: 'Cancelled',
     graphFailed: 'Sign-in failed',
+    graphManualOpenHint: "Can't open a browser automatically? Copy the URL above and visit it manually.",
+    graphOpenBrowserError: "Can't open browser: {error}. Copy the URL and open it manually.",
 
     // ── Connectivity step ────────────────────────────────────────────
     connectivityTitle: 'Running connectivity checks',
@@ -368,6 +370,8 @@ const messages = {
     graphSignedIn: '已登录',
     graphCancelled: '已取消',
     graphFailed: '登录失败',
+    graphManualOpenHint: '无法自动打开浏览器时，复制上方 URL 手动访问。',
+    graphOpenBrowserError: '无法打开浏览器：{error}。请复制 URL 手动访问。',
 
     connectivityTitle: '正在检查连通性',
     connectivitySubtitle: '四项并行检查，几秒内完成。',

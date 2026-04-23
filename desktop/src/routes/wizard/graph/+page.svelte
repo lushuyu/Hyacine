@@ -76,7 +76,7 @@
     try {
       await openUrl(uri);
     } catch (err) {
-      pushToast('error', `无法打开浏览器：${String(err)}。请复制 URL 手动访问。`);
+      pushToast('error', $t('graphOpenBrowserError', { error: String(err) }));
     }
   }
 
@@ -152,7 +152,7 @@
         </button>
       </div>
       <p class="text-center text-xs text-[rgb(var(--fg-muted))]">
-        无法自动打开浏览器时，复制上方 URL 手动访问。
+        {$t('graphManualOpenHint')}
       </p>
     </div>
   {:else if flow === 'approved'}

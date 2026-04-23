@@ -46,9 +46,13 @@ pub async fn rust_probe_claude(state: State<'_, SidecarState>) -> AppResult<Prob
         .unwrap_or("")
         .to_string();
 
-    // Pick the right keychain slot. Fall back to the legacy `"claude"`
-    // slot so pre-multi-provider installs still pass without a reconfig.
-    let key = secrets::get(&slug)?
+    // Pick the right keychain slot. `providers.current` may return an empty
+    // `secret_slug` on fresh installs or unexpected shapes; `keyring::get`
+    // with an empty slug errors on some backends, which would short-circuit
+    // the legacy fallback via `?`. Only probe the active slot when non-empty
+    // and always try the legacy `"claude"` slot as a safety net so
+    // pre-multi-provider installs still pass without a reconfig.
+    let key = (if !slug.is_empty() { secrets::get(&slug)? } else { None })
         .or_else(|| secrets::get("claude").ok().flatten())
         .unwrap_or_default();
 

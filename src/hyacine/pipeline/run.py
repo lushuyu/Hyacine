@@ -309,11 +309,20 @@ def run_pipeline(
             pass
         return _load_record()
     _p("llm", "ok")
+
+    # --- Phase 4: Render ---
+    # "Render" in this pipeline is the moment we commit to the LLM's
+    # markdown output as the final payload to ship (markdown → HTML
+    # happens inside `send_email` or the dry-run caller; neither can
+    # fail in isolation). We emit running/ok back-to-back so the wizard
+    # UI shows a distinct step that resolves only after the LLM has
+    # produced usable text — not pre-emptively alongside LLM ok.
+    _p("render", "running")
+    subject = f"Hyacine · {now_local.strftime('%Y-%m-%d')}"
     _p("render", "ok")
 
-    # --- Phase 4: Send (skipped in dry-run) ---
+    # --- Phase 5: Send (skipped in dry-run) ---
     _p("deliver", "running")
-    subject = f"Hyacine · {now_local.strftime('%Y-%m-%d')}"
     if dry_run:
         # Wizard preview path: render the email but DO NOT call sendMail.
         # We also leave the watermark untouched so the next real run still
