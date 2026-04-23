@@ -36,10 +36,13 @@ a = Analysis(
         "starlette",
         "uvicorn",
         "uvicorn.workers",
-        "h11",
         "httptools",
         "websockets",
-        "anyio._backends._trio",
+        # NOTE: `h11` is *kept* on purpose. It's an HTTP/1.1 parser used by
+        # uvicorn (which we drop) AND by httpcore / httpx (which we keep for
+        # every non-CLI provider call). Excluding it broke the
+        # anthropic_http and openai_chat probes with
+        # `No module named 'h11'` at first request. See issue #16.
         # Test / dev tooling that pyproject pulls transitively.
         "pytest",
         "mypy",

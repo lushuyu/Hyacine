@@ -25,6 +25,13 @@ _SAFE_KEYS: set[str] = {
     "language",
     "identity",
     "priorities",
+    # Provider selection — the wizard's /wizard/provider/ step writes these
+    # three to persist preset vs. custom-endpoint choice. Leaving them off
+    # the allowlist made every provider pick fail with the misleading
+    # "unknown config key: llm_api_format" error.
+    "llm_provider",
+    "llm_base_url",
+    "llm_api_format",
 }
 
 
@@ -41,6 +48,9 @@ def read_config() -> dict[str, Any]:
         "llm_model": cfg.llm_model,
         "run_time": cfg.run_time,
         "language": cfg.language,
+        "llm_provider": cfg.llm_provider,
+        "llm_base_url": cfg.llm_base_url,
+        "llm_api_format": cfg.llm_api_format,
         "identity": raw.get("identity", {"name": "", "role": "", "blurb": ""}),
         "priorities": raw.get("priorities", []),
     }
