@@ -23,8 +23,12 @@ From the repo root (needs Python 3.11+ and the project synced via `uv`):
 uv sync --all-extras
 uv run pip install pyinstaller
 cd desktop/sidecar
-uv run pyinstaller hyacine-ipc.spec --distpath ../src-tauri/binaries --workpath /tmp/pyi-work --clean -y
+uv run pyinstaller hyacine-ipc.spec --distpath ../src-tauri/binaries --clean -y
 ```
+
+PyInstaller picks a platform-appropriate scratch dir when `--workpath`
+is omitted (CI pins it to `--workpath ../../.pyi-work` so the cache is
+repo-local and easy to prune; locally, the default is fine).
 
 Then rename the output to match your host triple — Tauri looks for
 `binaries/hyacine-ipc-<target>[.exe]`:

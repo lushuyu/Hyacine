@@ -10,11 +10,13 @@ We explicitly skip the FastAPI / Uvicorn stack here: the sidecar is a
 stdin/stdout JSON-RPC server, it doesn't host the web UI. Dropping
 those shaves ~15 MB off the bundle.
 
-The hiddenimports list pins every handler module (router.py imports
-them dynamically, which PyInstaller's static analysis can't see) plus
-every platform keyring backend we might need at runtime — otherwise
-``keyring.get_keyring()`` returns the fail backend on Windows/macOS
-and the sidecar can't read the stored OAuth token.
+No ``hiddenimports`` needed: every module the sidecar touches
+(``hyacine.ipc.*``, ``hyacine.llm.*``, each handler) is reached through
+a static ``from ... import ...`` chain starting at ``entry.py``, so
+PyInstaller's graph analysis picks them up automatically. Secret
+storage is owned by the Rust parent (``src-tauri/src/secrets.rs`` via
+the ``keyring`` crate); the Python side never calls Python's keyring
+package, and we don't depend on it.
 """
 
 block_cipher = None
@@ -24,32 +26,7 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[],
-    hiddenimports=[
-        # IPC handlers — imported by name in router.build_handlers().
-        "hyacine.ipc.handlers.config_h",
-        "hyacine.ipc.handlers.connectivity_h",
-        "hyacine.ipc.handlers.graph_h",
-        "hyacine.ipc.handlers.pipeline_h",
-        "hyacine.ipc.handlers.providers_h",
-        "hyacine.ipc.handlers.system_h",
-        # LLM dispatcher picks a backend at runtime.
-        "hyacine.llm.anthropic_http",
-        "hyacine.llm.claude_code",
-        "hyacine.llm.openai_chat",
-        "hyacine.llm.providers",
-        # Keyring per-platform backends. Without these, keyring falls back to
-        # its "fail" backend inside a PyInstaller bundle and secrets.get()
-        # raises NoKeyringError at first token lookup.
-        "keyring.backends.macOS",
-        "keyring.backends.Windows",
-        "keyring.backends.SecretService",
-        "keyring.backends.kwallet",
-        "keyring.backends.chainer",
-        "keyring.backends.fail",
-        "keyring.backends.null",
-        # Pydantic v2 has JSON-schema plumbing that's also loaded dynamically.
-        "pydantic.deprecated.decorator",
-    ],
+    hiddenimports=[],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
