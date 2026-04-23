@@ -44,6 +44,7 @@
     "shortDescription": "Daily Outlook briefing, powered by Claude.",
     "longDescription": "Hyacine aggregates your Outlook mail and calendar every morning, passes the structured data to Claude, and delivers a prioritised briefing back to your inbox.",
     "resources": [],
+    "externalBin": ["binaries/hyacine-ipc"],
     "macOS": {
       "signingIdentity": null,
       "minimumSystemVersion": "10.15"
