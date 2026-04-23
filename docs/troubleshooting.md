@@ -64,6 +64,12 @@ Wait 60 seconds and retry.
 
 ## LLM fails
 
+> The subsections below are for the default **Claude Code OAuth** provider
+> (api_format `anthropic_cli`). If you've picked a different provider,
+> skip to [Other providers](#other-providers) first — the error will look
+> like `HTTP 401: invalid_api_key`, `Connection refused` (Ollama), etc.,
+> not a `claude` subprocess error.
+
 ### `CLAUDE_CODE_OAUTH_TOKEN is not set`
 
 Environment file not loaded. Check:
@@ -111,6 +117,90 @@ hand-rolled your unit, comment that line out.
 environment. The unit's `UnsetEnvironment=` line should prevent this — check
 that it's present and the shell profile that invoked `systemctl --user` did
 not re-export these variables.
+
+## Other providers
+
+<a id="other-providers"></a>
+
+Cases specific to the non-CLI providers (`anthropic_http` / `openai_chat`).
+
+### `HTTP 401` with `invalid x-api-key` or `invalid_api_key`
+
+Wrong key slot. Providers store keys in the OS keychain under the preset's
+`secret_slug` (see `src/hyacine/llm/providers.py`). For the desktop app,
+re-run the provider step in the wizard and paste the key again; for a CLI
+deploy, set `HYACINE_LLM_API_KEY` in `./.env`.
+
+### `HTTP 403` / "region not supported" / "model not allowed"
+
+Provider-side policy rejection. Check that `llm_model` in
+`config/config.yaml` is a model the key has access to. Anthropic Console
+keys only allow Claude models; a DeepSeek relay key won't authenticate
+against `api.anthropic.com`, even though both speak the Claude wire
+format.
+
+### `Connection refused` hitting a local Ollama / LM Studio
+
+The local server isn't running or `llm_base_url` is wrong. Default for
+Ollama is `http://localhost:11434`. Check with:
+
+```bash
+curl -s $(yq .llm_base_url config/config.yaml)/v1/models | head
+```
+
+If you're running Ollama in WSL but pointing from Windows (or vice
+versa), the `localhost` loopback doesn't cross the WSL boundary —
+bind the Ollama server on `0.0.0.0` and target the WSL IP instead.
+
+### Output is in the wrong language
+
+`config.yaml`'s `language` field (`en` / `zh-CN` / `zh-TW` / `ja`) is
+appended to the user message as "Respond in …". If the model still
+returns English, your prompt (in `prompts/hyacine.md`) probably has a
+conflicting directive — the system prompt wins most of the time. Either
+drop the English-only instruction from the prompt or tune the prompt
+itself for the target locale.
+
+## Desktop / wizard
+
+### Graph wizard shows code + URL but the browser doesn't open
+
+`@tauri-apps/plugin-opener` falls through to `xdg-open` on Linux. On
+WSL this only works when `wslview` / `wslu` is installed and the
+Windows-side default browser handler is registered. Workaround: copy
+the URL (Copy button next to the code) into a browser manually —
+the wizard is designed to surface the URL exactly for this case.
+
+### `libEGL / MESA-LOADER: failed to retrieve device information` spam
+
+Harmless WSLg warning from WebKit2GTK's GPU compositor looking for a
+driver that doesn't exist inside WSL. If the window renders fine,
+ignore it. If the window is black or flickering, disable GPU
+compositing before launching:
+
+```bash
+export WEBKIT_DISABLE_COMPOSITING_MODE=1
+export WEBKIT_DISABLE_DMABUF_RENDERER=1
+npm run tauri:dev
+```
+
+### `tauri:dev` fails with "resource path `binaries/hyacine-ipc-…` doesn't exist"
+
+The bundled sidecar binary hasn't been built. For a dev iteration
+loop, generate it once with PyInstaller:
+
+```bash
+cd ~/hyacine
+uv sync && uv pip install pyinstaller
+cd desktop/sidecar
+uv run pyinstaller hyacine-ipc.spec --distpath ../src-tauri/binaries --clean -y
+mv ../src-tauri/binaries/hyacine-ipc \
+   ../src-tauri/binaries/hyacine-ipc-$(rustc -vV | awk '/host/ {print $2}')
+```
+
+The Rust side falls back to `python3 -m hyacine.ipc` at *spawn time* if
+the bundled binary errors, but the *build-time* `externalBin` check in
+Tauri still requires the file to exist on disk.
 
 ## sendMail fails
 

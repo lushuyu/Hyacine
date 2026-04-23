@@ -72,6 +72,10 @@ Use the issue tracker. Include:
 
 ## Feature requests
 
-Open a discussion issue first. The pattern is intentionally narrow (Microsoft
-Graph + Claude Code). Adapters for other mail providers or LLMs are out of scope
-for v0 — see the spec for reasoning.
+Open a discussion issue first. The mail side is intentionally Microsoft
+Graph only — alternative mail providers (Gmail, IMAP, etc.) aren't on the
+roadmap. The LLM side is multi-provider: new presets slot into
+[`src/hyacine/llm/providers.py`](src/hyacine/llm/providers.py), and three
+wire formats are supported (`anthropic_cli`, `anthropic_http`,
+`openai_chat`). Feature ideas that expand the provider registry or the
+wizard UX are welcome; additions that fork the mail backend are not.
