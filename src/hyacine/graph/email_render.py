@@ -348,6 +348,25 @@ def _render_footer(model: str, date: str, generated_at: str) -> str:
     )
 
 
+# Map ``hyacine.config.YamlConfig.language`` codes → BCP-47 language
+# tags for the document's ``<html lang>`` attribute. Anything we don't
+# recognise falls back to ``en`` so screen readers and client-side
+# heuristics get a sensible default rather than a stale ``zh-CN``.
+_LANG_TAGS: dict[str, str] = {
+    "en": "en",
+    "zh-cn": "zh-CN",
+    "zh-tw": "zh-TW",
+    "zh": "zh-CN",
+    "ja": "ja",
+}
+
+
+def _bcp47(language: str) -> str:
+    if not language:
+        return "en"
+    return _LANG_TAGS.get(language.lower(), language)
+
+
 def render_modern_email_html(
     body_html: str,
     *,
@@ -355,19 +374,25 @@ def render_modern_email_html(
     date: str = "",
     weekday: str = "",
     generated_at: str = "",
+    language: str = "",
 ) -> str:
     """Wrap a sanitized HTML body in the HyacineAI modern email shell.
 
-    ``body_html`` should already be bleach-cleaned. Footer fields default
-    to empty strings — when omitted the shell falls back to "your local
-    LLM" and the current local date/time, which keeps the rendering
-    self-contained for ad-hoc previews and tests.
+    ``body_html`` should already be bleach-cleaned. ``language`` accepts
+    the same codes as ``YamlConfig.language`` (``en``, ``zh-CN``,
+    ``zh-TW``, ``ja``) and is mapped to a BCP-47 tag for the
+    document's ``<html lang>`` attribute — defaulting to ``en`` so the
+    metadata reflects the actual digest language rather than a stale
+    hardcoded value. Footer fields default to empty strings — when
+    omitted the shell falls back to "your local LLM" and the current
+    local date/time.
     """
     styled_body = _style_body(body_html)
     header = _render_header(date, weekday)
     footer = _render_footer(model, date, generated_at)
+    lang_tag = _bcp47(language)
     return (
-        '<!doctype html><html lang="zh-CN"><head>'
+        f'<!doctype html><html lang="{_esc(lang_tag)}"><head>'
         '<meta charset="utf-8"/>'
         '<meta name="viewport" content="width=device-width,initial-scale=1"/>'
         '<meta name="x-apple-disable-message-reformatting"/>'

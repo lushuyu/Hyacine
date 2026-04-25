@@ -67,14 +67,18 @@ def render_html_body(
     date: str = "",
     weekday: str = "",
     generated_at: str = "",
+    language: str = "",
 ) -> str:
     """Convert markdown → modern HyacineAI email HTML (sanitized).
 
     Pipeline: markdown → bleach allowlist → ``render_modern_email_html``
     (pansy-logo header, hero, color-bar section titles, three-segment
-    footer with model/date metadata). Returns a full HTML document
-    suitable for ``/me/sendMail``; for embedding the same content
-    inside another page use :func:`render_html_fragment`.
+    footer with model/date metadata). ``language`` accepts the same
+    codes as ``YamlConfig.language`` (``en``, ``zh-CN``, ``zh-TW``,
+    ``ja``) and drives the document's ``<html lang>`` attribute.
+    Returns a full HTML document suitable for ``/me/sendMail``; for
+    embedding the same content inside another page use
+    :func:`render_html_fragment`.
     """
     cleaned = _markdown_to_safe_html(markdown_text)
     return render_modern_email_html(
@@ -83,6 +87,7 @@ def render_html_body(
         date=date,
         weekday=weekday,
         generated_at=generated_at,
+        language=language,
     )
 
 
@@ -109,6 +114,7 @@ def send_email(
     date: str = "",
     weekday: str = "",
     generated_at: str = "",
+    language: str = "",
 ) -> str:
     """POST /me/sendMail with HTML body. Returns a logical message identifier.
 
@@ -118,9 +124,10 @@ def send_email(
 
     ``model`` / ``date`` / ``weekday`` / ``generated_at`` are forwarded to
     :func:`render_html_body` so the modern email footer can show the
-    provider/model and the local time the digest was generated. All four
-    are optional; the shell falls back to today's date and a generic
-    "your local LLM" chip when missing.
+    provider/model and the local time the digest was generated. ``language``
+    drives the document's ``<html lang>`` attribute. All five are optional;
+    the shell falls back to today's date, a generic "your local LLM" chip,
+    and ``en`` when missing.
     """
     html_content = render_html_body(
         markdown_body,
@@ -128,6 +135,7 @@ def send_email(
         date=date,
         weekday=weekday,
         generated_at=generated_at,
+        language=language,
     )
 
     token = cred.get_token("https://graph.microsoft.com/.default")

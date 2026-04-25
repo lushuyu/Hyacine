@@ -351,6 +351,7 @@ def run_pipeline(
             date=render_date,
             weekday=weekday_label,
             generated_at=render_time,
+            language=cfg.language,
         )
     except Exception as exc:
         send_error = exc

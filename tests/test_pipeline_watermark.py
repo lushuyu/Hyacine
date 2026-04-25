@@ -237,3 +237,125 @@ class TestWatermarkAdvancesOnlyOnSuccess:
         assert record.status == RunStatus.FAILED
         wm_after = run_module.read_watermark()
         assert abs((wm_after - initial_wm).total_seconds()) < 2
+
+
+class TestPipelineForwardsEmailContext:
+    """The pipeline must pass model + localized date/weekday/time + language
+    into ``send_email`` so the modern email footer reflects the run config.
+    """
+
+    def test_send_email_receives_render_context(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _patch_settings(monkeypatch, tmp_path)
+
+        # Override the YAML config to a non-default language + tz so we can
+        # see the values land in the captured kwargs.
+        from hyacine.config import YamlConfig
+
+        cfg = YamlConfig(
+            recipient_email="alice@example.com",
+            timezone="Asia/Singapore",
+            llm_model="claude-sonnet-4-5",
+            llm_timeout_seconds=10,
+            initial_watermark_lookback_hours=24,
+            language="zh-CN",
+        )
+        monkeypatch.setattr(run_module, "_get_cfg", lambda: cfg)
+
+        now_utc = datetime(2024, 6, 14, 23, 31, 0, tzinfo=UTC)  # Sat in SGT
+
+        monkeypatch.setattr(
+            "hyacine.graph.auth.load_or_create_record",
+            lambda *a, **kw: (object(), object()),
+        )
+        monkeypatch.setattr(
+            "hyacine.graph.fetch.fetch_emails",
+            lambda *a, **kw: [_make_email()],
+        )
+        monkeypatch.setattr(
+            "hyacine.graph.fetch.fetch_calendar",
+            lambda *a, **kw: [],
+        )
+        monkeypatch.setattr(
+            "hyacine.pipeline.run.summarize",
+            lambda *a, **kw: "# Daily report\n\nbody",
+        )
+        monkeypatch.setattr(
+            "hyacine.pipeline.rules.load_rules",
+            lambda *a, **kw: __import__(
+                "hyacine.pipeline.rules", fromlist=["RuleSet"]
+            ).RuleSet(),
+        )
+
+        captured: dict[str, object] = {}
+
+        def fake_send(
+            cred, recipient, subject, markdown_body, **kwargs
+        ):  # type: ignore[override]
+            captured["recipient"] = recipient
+            captured["subject"] = subject
+            captured.update(kwargs)
+            return "msg-id-zh"
+
+        monkeypatch.setattr("hyacine.graph.send.send_email", fake_send)
+
+        record = run_module.run_pipeline(now_utc=now_utc)
+        assert record.status == RunStatus.SUCCESS
+
+        # Local time in Asia/Singapore is +08:00 → 2024-06-15 07:31 Saturday.
+        assert captured["model"] == "claude-sonnet-4-5"
+        assert captured["date"] == "2024-06-15"
+        assert captured["generated_at"] == "07:31"
+        assert captured["weekday"] == "星期六"  # zh-CN Saturday
+        assert captured["language"] == "zh-CN"
+
+    def test_send_email_receives_english_weekday_when_lang_en(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _patch_settings(monkeypatch, tmp_path)
+        from hyacine.config import YamlConfig
+
+        cfg = YamlConfig(
+            recipient_email="alice@example.com",
+            timezone="UTC",
+            llm_model="gpt-4.1",
+            llm_timeout_seconds=10,
+            language="en",
+        )
+        monkeypatch.setattr(run_module, "_get_cfg", lambda: cfg)
+        now_utc = datetime(2024, 6, 14, 12, 0, 0, tzinfo=UTC)  # Friday UTC
+
+        monkeypatch.setattr(
+            "hyacine.graph.auth.load_or_create_record",
+            lambda *a, **kw: (object(), object()),
+        )
+        monkeypatch.setattr(
+            "hyacine.graph.fetch.fetch_emails", lambda *a, **kw: [_make_email()]
+        )
+        monkeypatch.setattr(
+            "hyacine.graph.fetch.fetch_calendar", lambda *a, **kw: []
+        )
+        monkeypatch.setattr(
+            "hyacine.pipeline.run.summarize", lambda *a, **kw: "# x\n"
+        )
+        monkeypatch.setattr(
+            "hyacine.pipeline.rules.load_rules",
+            lambda *a, **kw: __import__(
+                "hyacine.pipeline.rules", fromlist=["RuleSet"]
+            ).RuleSet(),
+        )
+
+        captured: dict[str, object] = {}
+
+        def fake_send(cred, recipient, subject, markdown_body, **kwargs):
+            captured.update(kwargs)
+            return "msg-id-en"
+
+        monkeypatch.setattr("hyacine.graph.send.send_email", fake_send)
+
+        run_module.run_pipeline(now_utc=now_utc)
+
+        assert captured["weekday"] == "Friday"
+        assert captured["language"] == "en"
+        assert captured["model"] == "gpt-4.1"

@@ -18,8 +18,9 @@ def test_modern_shell_includes_design_chrome() -> None:
         date="2026-04-25",
         weekday="星期五",
         generated_at="07:31",
+        language="zh-CN",
     )
-    # Page-level chrome
+    # Page-level chrome — language drives the lang attribute.
     assert html.startswith("<!doctype html>")
     assert 'lang="zh-CN"' in html
     # Header — wordmark + date with weekday suffix
@@ -138,3 +139,21 @@ def test_render_html_fragment_returns_no_doctype() -> None:
     assert "<html" not in fragment.lower()
     assert "<h1" in fragment
     assert "embedded" in fragment
+
+
+def test_html_lang_reflects_configured_language() -> None:
+    """``language`` config must drive ``<html lang>`` (BCP-47 mapping)."""
+    from hyacine.graph.send import render_html_body
+
+    html_zh = render_html_body("hi", language="zh-CN")
+    assert '<html lang="zh-CN">' in html_zh
+
+    html_en = render_html_body("hi", language="en")
+    assert '<html lang="en">' in html_en
+
+    html_ja = render_html_body("hi", language="ja")
+    assert '<html lang="ja">' in html_ja
+
+    # Empty / unknown → defaults to ``en``, not the previous hardcoded ``zh-CN``.
+    html_default = render_html_body("hi")
+    assert '<html lang="en">' in html_default
