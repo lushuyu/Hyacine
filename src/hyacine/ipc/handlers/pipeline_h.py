@@ -210,12 +210,14 @@ def _markdown_to_html(md: str) -> str:
     """Render markdown → modern HTML email for the dry-run preview.
 
     Funnels through the same ``render_html_body`` used at real-send time
-    so the wizard preview matches what the recipient will see — pansy
-    header, hero, color-bar sections, three-segment footer, and the
-    document's ``<html lang>`` reflects the configured language. The
-    date/time and weekday come from ``now`` in the configured timezone
-    (not naive ``datetime.now()``) so the preview matches the real
-    pipeline byte-for-byte. Falls back to an escaped ``<pre>`` block
+    so the wizard preview follows the same rendering path and visual
+    format as the recipient will see — pansy header, hero, color-bar
+    sections, three-segment footer, and ``<html lang>`` reflecting the
+    configured language. ``date`` / ``generated_at`` / ``weekday`` are
+    derived from ``now`` in the configured timezone (not naive
+    ``datetime.now()``); they are still preview-time values and will
+    naturally differ from any later real run, but the *shape* and
+    formatting are identical. Falls back to an escaped ``<pre>`` block
     when the body is empty or rendering blows up.
     """
     if not md.strip():

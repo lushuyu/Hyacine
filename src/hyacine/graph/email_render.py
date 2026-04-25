@@ -83,9 +83,14 @@ _PANSY_SVG_20 = _PANSY_SVG_22.replace(
 def _style_body(html: str) -> str:
     """Inject inline styles matching the modern email design language.
 
-    Operates on bleach-sanitized HTML; tag set is restricted so the
-    pattern matches stay simple. Non-greedy ``.*?`` is safe here because
-    the cleaned HTML never has nested elements of the same kind.
+    Operates on bleach-sanitized HTML. The replacements rely on the
+    *specific* tags they style being simple, non-overlapping blocks in
+    the markdown→bleach output — for example, ``<h1>`` and ``<h2>``
+    don't nest inside themselves, so a non-greedy ``<h1>(.*?)</h1>``
+    is safe. Tags that DO nest (``<ul>``/``<li>``) get an opening-tag
+    style injection (no content capture) so nested lists round-trip
+    intact. ``<a>`` styling matches the opening tag only so additional
+    bleach-allowed attributes (``title``) are preserved.
     """
     # h1 → hero serif title (38px)
     html = re.sub(
