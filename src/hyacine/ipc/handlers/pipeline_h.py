@@ -210,30 +210,48 @@ def _markdown_to_html(md: str) -> str:
     """Render markdown → modern HTML email for the dry-run preview.
 
     Funnels through the same ``render_html_body`` used at real-send time
-    so the wizard preview matches what the recipient will see — same
-    pansy header, hero, color-bar sections, and three-segment footer.
-    Falls back to a plain placeholder when the body is empty or the
-    render pipeline blows up.
+    so the wizard preview matches what the recipient will see — pansy
+    header, hero, color-bar sections, three-segment footer, and the
+    document's ``<html lang>`` reflects the configured language. The
+    date/time and weekday come from ``now`` in the configured timezone
+    (not naive ``datetime.now()``) so the preview matches the real
+    pipeline byte-for-byte. Falls back to an escaped ``<pre>`` block
+    when the body is empty or rendering blows up.
     """
     if not md.strip():
         return _placeholder_html()
     try:
+        import zoneinfo  # noqa: PLC0415
+
         from hyacine.config import get_settings, load_yaml_config  # noqa: PLC0415
         from hyacine.graph.send import render_html_body  # noqa: PLC0415
+        from hyacine.pipeline.run import _weekday_label  # noqa: PLC0415
 
         cfg_model = ""
+        cfg_language = ""
+        cfg_timezone = "UTC"
         try:
             settings = get_settings()
-            cfg_model = load_yaml_config(settings.config_path).llm_model or ""
+            cfg = load_yaml_config(settings.config_path)
+            cfg_model = cfg.llm_model or ""
+            cfg_language = cfg.language or ""
+            cfg_timezone = cfg.timezone or "UTC"
         except Exception:  # noqa: BLE001
             pass
 
-        now = datetime.now()
+        try:
+            tz = zoneinfo.ZoneInfo(cfg_timezone)
+        except Exception:  # noqa: BLE001
+            tz = zoneinfo.ZoneInfo("UTC")
+        now_local = datetime.now(tz)
+
         return render_html_body(
             md,
             model=cfg_model,
-            date=now.strftime("%Y-%m-%d"),
-            generated_at=now.strftime("%H:%M"),
+            date=now_local.strftime("%Y-%m-%d"),
+            weekday=_weekday_label(now_local, cfg_language),
+            generated_at=now_local.strftime("%H:%M"),
+            language=cfg_language,
         )
     except Exception:  # noqa: BLE001
         # Fallback when imports / rendering fail: never embed unsanitised

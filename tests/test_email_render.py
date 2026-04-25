@@ -162,3 +162,72 @@ def test_html_lang_reflects_configured_language() -> None:
     # also resolve to ``en`` rather than passing through unchanged.
     html_unknown = render_html_body("hi", language="fr-FR")
     assert '<html lang="en">' in html_unknown
+
+
+def test_dry_run_preview_uses_configured_language_and_timezone(
+    tmp_path, monkeypatch
+) -> None:
+    """``_markdown_to_html`` must read language + timezone from YAML and
+    pass them through to ``render_html_body`` so the wizard preview
+    matches what the real pipeline will send.
+    """
+    from hyacine.config import Settings, YamlConfig
+    from hyacine.ipc.handlers import pipeline_h
+
+    cfg_yaml = tmp_path / "config.yaml"
+    cfg_yaml.write_text(
+        "recipient_email: a@b.com\n"
+        "timezone: Asia/Singapore\n"
+        "llm_model: claude-sonnet-4-5\n"
+        "language: zh-CN\n",
+        encoding="utf-8",
+    )
+
+    fake_settings = Settings.model_construct(
+        config_path=cfg_yaml,
+        rules_path=tmp_path / "rules.yaml",
+        prompt_path=tmp_path / "prompt.md",
+        db_path=tmp_path / "db",
+        auth_dir=tmp_path / "auth",
+        log_dir=tmp_path / "logs",
+        auth_record_path=tmp_path / "auth" / "rec.json",
+        graph_client_id="x",
+        graph_tenant_id="common",
+        graph_scopes="User.Read",
+        ntfy_topic="",
+        healthchecks_uuid="",
+    )
+    monkeypatch.setattr(
+        "hyacine.config.get_settings", lambda *a, **kw: fake_settings
+    )
+    monkeypatch.setattr(
+        "hyacine.config.load_yaml_config",
+        lambda p: YamlConfig.model_validate(
+            __import__("yaml").safe_load(p.read_text())
+        ),
+    )
+
+    captured: dict[str, object] = {}
+
+    def fake_render(text, **kwargs):
+        captured.update(kwargs)
+        captured["text"] = text
+        return "<html><body>preview</body></html>"
+
+    monkeypatch.setattr("hyacine.graph.send.render_html_body", fake_render)
+
+    pipeline_h._markdown_to_html("# preview body")
+
+    assert captured["model"] == "claude-sonnet-4-5"
+    assert captured["language"] == "zh-CN"
+    # zh-CN weekday label must be one of the localised forms.
+    assert captured["weekday"] in {
+        "星期一", "星期二", "星期三", "星期四",
+        "星期五", "星期六", "星期日",
+    }
+    # ``date`` and ``generated_at`` come from now() in Asia/Singapore,
+    # so they cannot be naive UTC strings — at minimum they must look
+    # like a YYYY-MM-DD date and HH:MM time.
+    import re
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", captured["date"])  # type: ignore[arg-type]
+    assert re.fullmatch(r"\d{2}:\d{2}", captured["generated_at"])  # type: ignore[arg-type]
