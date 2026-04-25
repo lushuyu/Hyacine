@@ -207,29 +207,38 @@ def history(limit: int = 14) -> dict[str, Any]:
 
 
 def _markdown_to_html(md: str) -> str:
-    """Render markdown → HTML for the dry-run preview.
+    """Render markdown → modern HTML email for the dry-run preview.
 
-    We lean on the `markdown` + `bleach` pair already in hyacine's deps so the
-    rendered body matches what ``send_email`` would produce; if either is
-    missing we fall back to an `<pre>` so the preview still shows something.
+    Funnels through the same ``render_html_body`` used at real-send time
+    so the wizard preview matches what the recipient will see — same
+    pansy header, hero, color-bar sections, and three-segment footer.
+    Falls back to a plain placeholder when the body is empty or the
+    render pipeline blows up.
     """
     if not md.strip():
         return _placeholder_html()
     try:
-        import bleach  # noqa: PLC0415
-        import markdown as _md  # noqa: PLC0415
+        from hyacine.config import get_settings, load_yaml_config  # noqa: PLC0415
+        from hyacine.graph.send import render_html_body  # noqa: PLC0415
 
-        raw = _md.markdown(md, extensions=["extra", "sane_lists"])
-        cleaned = bleach.clean(
-            raw,
-            tags=list(bleach.sanitizer.ALLOWED_TAGS) + ["p", "h1", "h2", "h3", "h4", "pre", "code"],
-            strip=True,
+        cfg_model = ""
+        try:
+            settings = get_settings()
+            cfg_model = load_yaml_config(settings.config_path).llm_model or ""
+        except Exception:  # noqa: BLE001
+            pass
+
+        now = datetime.now()
+        return render_html_body(
+            md,
+            model=cfg_model,
+            date=now.strftime("%Y-%m-%d"),
+            generated_at=now.strftime("%H:%M"),
         )
-        return _wrap_preview(cleaned)
     except Exception:  # noqa: BLE001
-        # Fallback when markdown/bleach are missing or throw: never embed
-        # unsanitised text. Escape so any HTML (incl. <script>/<img src=…>)
-        # is rendered as literal, not parsed, in the sandboxed iframe.
+        # Fallback when imports / rendering fail: never embed unsanitised
+        # text. Escape so any HTML (incl. <script>/<img src=…>) is rendered
+        # as literal, not parsed, in the sandboxed iframe.
         import html as _html  # noqa: PLC0415
 
         return _wrap_preview(f"<pre>{_html.escape(md)}</pre>")

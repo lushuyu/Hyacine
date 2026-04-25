@@ -71,7 +71,14 @@ def test_send_email_posts_expected_body() -> None:
 
     body = message.get("body", {})
     assert body.get("contentType") == "HTML"
-    assert "<strong>Hello</strong>" in body.get("content", "")
+    content = body.get("content", "")
+    # Markdown bold round-trips through bleach into a styled <strong> tag
+    # — accept any inline-styled variant the modern shell emits.
+    assert "<strong" in content
+    assert "Hello" in content
+    # Modern shell signatures: doctype + the HyacineAI footer signature.
+    assert "<!doctype html>" in content
+    assert "HyacineAI" in content
 
     recipients = message.get("toRecipients", [])
     assert len(recipients) == 1

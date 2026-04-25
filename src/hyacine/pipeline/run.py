@@ -319,6 +319,9 @@ def run_pipeline(
     # produced usable text — not pre-emptively alongside LLM ok.
     _p("render", "running")
     subject = f"Hyacine · {now_local.strftime('%Y-%m-%d')}"
+    weekday_label = _weekday_label(now_local, cfg.language)
+    render_date = now_local.strftime("%Y-%m-%d")
+    render_time = now_local.strftime("%H:%M")
     _p("render", "ok")
 
     # --- Phase 5: Send (skipped in dry-run) ---
@@ -344,6 +347,10 @@ def run_pipeline(
             cfg.recipient_email,
             subject,
             markdown,
+            model=cfg.llm_model,
+            date=render_date,
+            weekday=weekday_label,
+            generated_at=render_time,
         )
     except Exception as exc:
         send_error = exc
@@ -390,6 +397,28 @@ def _ensure_utc(dt: datetime) -> datetime:
     if dt.tzinfo is None:
         return dt.replace(tzinfo=UTC)
     return dt
+
+
+# Weekday names in the user's chosen language. Falls back to English when
+# the language code isn't one we localise — locale-free so we can run
+# on minimal containers without ``LC_ALL`` configured.
+_WEEKDAY_LABELS_EN = (
+    "Monday", "Tuesday", "Wednesday", "Thursday",
+    "Friday", "Saturday", "Sunday",
+)
+_WEEKDAY_LABELS_ZH = ("星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日")
+_WEEKDAY_LABELS_JA = ("月曜日", "火曜日", "水曜日", "木曜日", "金曜日", "土曜日", "日曜日")
+
+
+def _weekday_label(dt: datetime, language: str) -> str:
+    """Return the weekday in the user's configured language."""
+    idx = dt.weekday()
+    table = _WEEKDAY_LABELS_EN
+    if language and language.lower().startswith("zh"):
+        table = _WEEKDAY_LABELS_ZH
+    elif language and language.lower().startswith("ja"):
+        table = _WEEKDAY_LABELS_JA
+    return table[idx]
 
 
 def main() -> int:
