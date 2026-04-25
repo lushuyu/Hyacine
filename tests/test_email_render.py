@@ -157,3 +157,8 @@ def test_html_lang_reflects_configured_language() -> None:
     # Empty / unknown → defaults to ``en``, not the previous hardcoded ``zh-CN``.
     html_default = render_html_body("hi")
     assert '<html lang="en">' in html_default
+
+    # Unrecognised codes (e.g. an unsupported preset like ``fr-FR``)
+    # also resolve to ``en`` rather than passing through unchanged.
+    html_unknown = render_html_body("hi", language="fr-FR")
+    assert '<html lang="en">' in html_unknown

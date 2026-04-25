@@ -362,9 +362,16 @@ _LANG_TAGS: dict[str, str] = {
 
 
 def _bcp47(language: str) -> str:
+    """Normalise a config language code to a BCP-47 ``<html lang>`` value.
+
+    Empty / missing / unrecognised codes resolve to ``en`` so the
+    document advertises a real language even when the config string
+    isn't one we localise. Add new mappings to ``_LANG_TAGS`` rather
+    than special-casing here.
+    """
     if not language:
         return "en"
-    return _LANG_TAGS.get(language.lower(), language)
+    return _LANG_TAGS.get(language.lower(), "en")
 
 
 def render_modern_email_html(
