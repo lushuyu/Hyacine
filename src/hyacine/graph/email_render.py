@@ -248,11 +248,11 @@ def _style_body(html: str) -> str:
 
     # Inject style onto every ``<a ...>`` opening tag, preserving
     # ``href`` plus any other attributes bleach may have left intact
-    # (``title`` in particular). Matching only the opening tag keeps us
-    # robust against the full anchor body being a multi-line markdown
-    # phrase or containing nested elements.
+    # (``title`` in particular). The attribute matcher treats quoted
+    # strings atomically so a literal ``>`` inside ``title="foo>bar"``
+    # cannot terminate the match early.
     html = re.sub(
-        r"<a ([^>]*)>",
+        r'<a ((?:[^>"\']+|"[^"]*"|\'[^\']*\')*)>',
         (
             f'<a \\1 style="color:{_ACCENT};text-decoration:none;'
             f'border-bottom:1px solid {_ACCENT_SOFT};">'

@@ -130,6 +130,26 @@ def test_link_with_title_attribute_keeps_attrs_and_styles() -> None:
     assert "border-bottom:1px solid" in html
 
 
+def test_link_with_quoted_gt_in_title_does_not_terminate_match_early() -> None:
+    """Anchor regex must treat quoted attribute values atomically.
+
+    A literal ``>`` inside ``title="…"`` is valid HTML; a naive
+    ``<a ([^>]*)>`` match would clip the opening tag at the first
+    ``>`` and produce malformed markup.
+    """
+    from hyacine.graph.email_render import render_modern_email_html
+
+    html = render_modern_email_html(
+        '<p><a href="https://example.com" title="a>b">link</a></p>'
+    )
+    # Title attribute survives intact — `>` inside quotes was not eaten.
+    assert 'title="a>b"' in html
+    # Anchor still received the design style.
+    assert "border-bottom:1px solid" in html
+    # Body text "link" still rendered (regex didn't drop the rest of the tag).
+    assert ">link</a>" in html
+
+
 def test_render_html_fragment_returns_no_doctype() -> None:
     """Fragment renderer must not wrap its body in a full HTML document."""
     from hyacine.graph.send import render_html_fragment

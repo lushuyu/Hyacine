@@ -227,7 +227,7 @@ def _markdown_to_html(md: str) -> str:
 
         from hyacine.config import get_settings, load_yaml_config  # noqa: PLC0415
         from hyacine.graph.send import render_html_body  # noqa: PLC0415
-        from hyacine.pipeline.run import _weekday_label  # noqa: PLC0415
+        from hyacine.i18n import weekday_label  # noqa: PLC0415
 
         cfg_model = ""
         cfg_language = ""
@@ -251,7 +251,7 @@ def _markdown_to_html(md: str) -> str:
             md,
             model=cfg_model,
             date=now_local.strftime("%Y-%m-%d"),
-            weekday=_weekday_label(now_local, cfg_language),
+            weekday=weekday_label(now_local, cfg_language),
             generated_at=now_local.strftime("%H:%M"),
             language=cfg_language,
         )
