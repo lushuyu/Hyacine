@@ -81,3 +81,60 @@ def test_render_html_body_default_footer_when_model_missing() -> None:
 
     html = render_html_body("# hi")
     assert "your local LLM" in html
+
+
+def test_header_and_footer_escape_user_supplied_strings() -> None:
+    """Crafted model/date/weekday must not punch through into markup."""
+    from hyacine.graph.email_render import render_modern_email_html
+
+    html = render_modern_email_html(
+        "<p>body</p>",
+        model='</span><script>alert(1)</script>',
+        date="<bad>",
+        weekday="evil&day",
+        generated_at='">"',
+    )
+    # No raw script/markup punched through.
+    assert "<script>alert(1)</script>" not in html
+    assert "<bad>" not in html
+    # Escaped variants present.
+    assert "&lt;script&gt;" in html
+    assert "&lt;bad&gt;" in html
+    assert "evil&amp;day" in html
+
+
+def test_nested_lists_keep_structure() -> None:
+    """Outer <li> styling must not eat the closing tag of an inner <li>."""
+    from hyacine.graph.email_render import render_modern_email_html
+
+    nested = "<ul><li>outer<ul><li>inner</li></ul></li></ul>"
+    html = render_modern_email_html(nested)
+    # Both list items present and the structure is intact.
+    assert html.count("<li") == 2
+    assert html.count("</li>") == 2
+    assert "outer" in html
+    assert "inner" in html
+
+
+def test_link_with_title_attribute_keeps_attrs_and_styles() -> None:
+    """Anchor styling must preserve href + title (and any other attrs)."""
+    from hyacine.graph.email_render import render_modern_email_html
+
+    html = render_modern_email_html(
+        '<p>see <a href="https://example.com" title="t">site</a></p>'
+    )
+    assert 'href="https://example.com"' in html
+    assert 'title="t"' in html
+    # Style was injected onto the styled anchor.
+    assert "border-bottom:1px solid" in html
+
+
+def test_render_html_fragment_returns_no_doctype() -> None:
+    """Fragment renderer must not wrap its body in a full HTML document."""
+    from hyacine.graph.send import render_html_fragment
+
+    fragment = render_html_fragment("# embedded")
+    assert "<!doctype html>" not in fragment.lower()
+    assert "<html" not in fragment.lower()
+    assert "<h1" in fragment
+    assert "embedded" in fragment

@@ -10,8 +10,20 @@ explicit widths.
 """
 from __future__ import annotations
 
+import html as _html
 import re
 from datetime import datetime
+
+
+def _esc(s: str) -> str:
+    """HTML-escape a string we are about to interpolate into a template.
+
+    Header/footer fields (model id, date, weekday, generated_at) flow
+    through here because they originate from config or pipeline state —
+    a crafted model id ``</span><script>...`` must not punch through
+    into the rendered email.
+    """
+    return _html.escape(s, quote=True)
 
 # Palette — matches hyacine.ai landing page and the design canvas.
 _INK = "#1F1631"
@@ -172,15 +184,16 @@ def _style_body(html: str) -> str:
         "<ol>",
         f'<ol style="list-style:decimal;padding-left:24px;margin:0 0 18px;color:{_PLUM};">',
     )
-    html = re.sub(
-        r"<li>(.*?)</li>",
+    # Style on opening tag only — non-greedy ``<li>(.*?)</li>`` would
+    # corrupt nested lists by ending the outer match at the first inner
+    # ``</li>``. ``str.replace`` is safe regardless of nesting.
+    html = html.replace(
+        "<li>",
         (
             f'<li style="font-size:14px;color:{_INK};line-height:1.7;'
             "padding:10px 0 10px 16px;border-left:2px solid "
-            f'{_LINE};margin:0 0 8px;">\\1</li>'
+            f'{_LINE};margin:0 0 8px;">'
         ),
-        html,
-        flags=re.DOTALL,
     )
 
     # tables (calendar block, etc.)
@@ -228,15 +241,18 @@ def _style_body(html: str) -> str:
         flags=re.DOTALL,
     )
 
-    # links
+    # Inject style onto every ``<a ...>`` opening tag, preserving
+    # ``href`` plus any other attributes bleach may have left intact
+    # (``title`` in particular). Matching only the opening tag keeps us
+    # robust against the full anchor body being a multi-line markdown
+    # phrase or containing nested elements.
     html = re.sub(
-        r'<a href="([^"]+)">(.*?)</a>',
+        r"<a ([^>]*)>",
         (
-            f'<a href="\\1" style="color:{_ACCENT};text-decoration:none;'
-            f'border-bottom:1px solid {_ACCENT_SOFT};">\\2</a>'
+            f'<a \\1 style="color:{_ACCENT};text-decoration:none;'
+            f'border-bottom:1px solid {_ACCENT_SOFT};">'
         ),
         html,
-        flags=re.DOTALL,
     )
 
     # inline code
@@ -255,8 +271,9 @@ def _style_body(html: str) -> str:
 
 
 def _render_header(date: str, weekday: str) -> str:
-    date_str = date or datetime.now().strftime("%Y-%m-%d")
-    suffix = f" · {weekday}" if weekday else ""
+    date_str = _esc(date or datetime.now().strftime("%Y-%m-%d"))
+    weekday_str = _esc(weekday)
+    suffix = f" · {weekday_str}" if weekday_str else ""
     return (
         '<tr><td style="padding:40px 56px 28px;">'
         '<table cellpadding="0" cellspacing="0" border="0" role="presentation" '
@@ -283,11 +300,12 @@ def _render_header(date: str, weekday: str) -> str:
 
 
 def _render_footer(model: str, date: str, generated_at: str) -> str:
-    date_str = date or datetime.now().strftime("%Y-%m-%d")
-    time_str = generated_at or datetime.now().strftime("%H:%M")
-    if model:
+    date_str = _esc(date or datetime.now().strftime("%Y-%m-%d"))
+    time_str = _esc(generated_at or datetime.now().strftime("%H:%M"))
+    model_esc = _esc(model)
+    if model_esc:
         model_chip = (
-            f'<span style="color:{_ACCENT};font-weight:600;">{model}</span>'
+            f'<span style="color:{_ACCENT};font-weight:600;">{model_esc}</span>'
         )
     else:
         model_chip = (
@@ -384,4 +402,16 @@ def render_modern_email_html(
     )
 
 
-__all__ = ["render_modern_email_html"]
+def render_email_fragment(body_html: str) -> str:
+    """Style a sanitized HTML body with the modern email aesthetic.
+
+    Returns the styled markup *without* the ``<!doctype html>`` /
+    ``<body>`` wrapper. Use this when embedding the rendered digest
+    inside another HTML page (e.g. the FastAPI run-detail view) where
+    a full document would nest inside a ``<div>`` and confuse the
+    surrounding template.
+    """
+    return _style_body(body_html)
+
+
+__all__ = ["render_modern_email_html", "render_email_fragment"]

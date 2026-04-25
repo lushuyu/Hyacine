@@ -27,10 +27,16 @@ _ALLOWED_ATTRS: dict[str, list[str]] = {
 
 
 def _render_markdown(text: str) -> str:
-    """Convert markdown to sanitized HTML."""
+    """Convert markdown to a sanitized, design-styled HTML fragment.
+
+    Uses ``render_html_fragment`` (no ``<!doctype html>`` wrapper) so
+    the result embeds cleanly inside the run-detail Jinja template's
+    ``<div>`` container — wrapping the email shell here would nest a
+    full document inside another page.
+    """
     try:
-        from hyacine.graph.send import render_html_body
-        return render_html_body(text)
+        from hyacine.graph.send import render_html_fragment
+        return render_html_fragment(text)
     except NotImplementedError:
         pass
     raw = markdown.markdown(text, extensions=["extra", "tables", "fenced_code"])
