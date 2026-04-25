@@ -143,7 +143,10 @@ def test_run_detail_renders_markdown(client_with_db: tuple[TestClient, Path]) ->
 
     resp = tc.get(f"/runs/{run_id}")
     assert resp.status_code == 200
-    assert "<h1>hi</h1>" in resp.text
+    # Markdown "# hi" round-trips through the modern email shell into a
+    # styled <h1>...hi</h1> — accept any inline-styled variant.
+    assert "<h1" in resp.text
+    assert ">hi</h1>" in resp.text
 
 
 def test_run_detail_404(client: TestClient) -> None:

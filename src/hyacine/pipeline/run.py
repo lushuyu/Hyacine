@@ -21,6 +21,7 @@ from datetime import UTC, datetime, timedelta
 
 from hyacine.config import Settings, YamlConfig, load_yaml_config
 from hyacine.db import Run, Watermark, init_db, session_scope
+from hyacine.i18n import weekday_label
 from hyacine.llm import summarize
 from hyacine.llm.providers import resolve as resolve_provider
 from hyacine.models import FetchResult, RunRecord, RunStatus
@@ -319,6 +320,9 @@ def run_pipeline(
     # produced usable text — not pre-emptively alongside LLM ok.
     _p("render", "running")
     subject = f"Hyacine · {now_local.strftime('%Y-%m-%d')}"
+    render_weekday = weekday_label(now_local, cfg.language)
+    render_date = now_local.strftime("%Y-%m-%d")
+    render_time = now_local.strftime("%H:%M")
     _p("render", "ok")
 
     # --- Phase 5: Send (skipped in dry-run) ---
@@ -344,6 +348,11 @@ def run_pipeline(
             cfg.recipient_email,
             subject,
             markdown,
+            model=cfg.llm_model,
+            date=render_date,
+            weekday=render_weekday,
+            generated_at=render_time,
+            language=cfg.language,
         )
     except Exception as exc:
         send_error = exc

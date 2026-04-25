@@ -207,29 +207,58 @@ def history(limit: int = 14) -> dict[str, Any]:
 
 
 def _markdown_to_html(md: str) -> str:
-    """Render markdown → HTML for the dry-run preview.
+    """Render markdown → modern HTML email for the dry-run preview.
 
-    We lean on the `markdown` + `bleach` pair already in hyacine's deps so the
-    rendered body matches what ``send_email`` would produce; if either is
-    missing we fall back to an `<pre>` so the preview still shows something.
+    Funnels through the same ``render_html_body`` used at real-send time
+    so the wizard preview follows the same rendering path and visual
+    format as the recipient will see — pansy header, hero, color-bar
+    sections, three-segment footer, and ``<html lang>`` reflecting the
+    configured language. ``date`` / ``generated_at`` / ``weekday`` are
+    derived from ``now`` in the configured timezone (not naive
+    ``datetime.now()``); they are still preview-time values and will
+    naturally differ from any later real run, but the *shape* and
+    formatting are identical. Falls back to an escaped ``<pre>`` block
+    when the body is empty or rendering blows up.
     """
     if not md.strip():
         return _placeholder_html()
     try:
-        import bleach  # noqa: PLC0415
-        import markdown as _md  # noqa: PLC0415
+        import zoneinfo  # noqa: PLC0415
 
-        raw = _md.markdown(md, extensions=["extra", "sane_lists"])
-        cleaned = bleach.clean(
-            raw,
-            tags=list(bleach.sanitizer.ALLOWED_TAGS) + ["p", "h1", "h2", "h3", "h4", "pre", "code"],
-            strip=True,
+        from hyacine.config import get_settings, load_yaml_config  # noqa: PLC0415
+        from hyacine.graph.send import render_html_body  # noqa: PLC0415
+        from hyacine.i18n import weekday_label  # noqa: PLC0415
+
+        cfg_model = ""
+        cfg_language = ""
+        cfg_timezone = "UTC"
+        try:
+            settings = get_settings()
+            cfg = load_yaml_config(settings.config_path)
+            cfg_model = cfg.llm_model or ""
+            cfg_language = cfg.language or ""
+            cfg_timezone = cfg.timezone or "UTC"
+        except Exception:  # noqa: BLE001
+            pass
+
+        try:
+            tz = zoneinfo.ZoneInfo(cfg_timezone)
+        except Exception:  # noqa: BLE001
+            tz = zoneinfo.ZoneInfo("UTC")
+        now_local = datetime.now(tz)
+
+        return render_html_body(
+            md,
+            model=cfg_model,
+            date=now_local.strftime("%Y-%m-%d"),
+            weekday=weekday_label(now_local, cfg_language),
+            generated_at=now_local.strftime("%H:%M"),
+            language=cfg_language,
         )
-        return _wrap_preview(cleaned)
     except Exception:  # noqa: BLE001
-        # Fallback when markdown/bleach are missing or throw: never embed
-        # unsanitised text. Escape so any HTML (incl. <script>/<img src=…>)
-        # is rendered as literal, not parsed, in the sandboxed iframe.
+        # Fallback when imports / rendering fail: never embed unsanitised
+        # text. Escape so any HTML (incl. <script>/<img src=…>) is rendered
+        # as literal, not parsed, in the sandboxed iframe.
         import html as _html  # noqa: PLC0415
 
         return _wrap_preview(f"<pre>{_html.escape(md)}</pre>")

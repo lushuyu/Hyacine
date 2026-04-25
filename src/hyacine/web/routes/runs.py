@@ -27,14 +27,22 @@ _ALLOWED_ATTRS: dict[str, list[str]] = {
 
 
 def _render_markdown(text: str) -> str:
-    """Convert markdown to sanitized HTML."""
+    """Convert markdown to a sanitized, design-styled HTML fragment.
+
+    Uses ``render_html_fragment`` (no ``<!doctype html>`` wrapper) so
+    the result embeds cleanly inside the run-detail Jinja template's
+    ``<div>`` container — wrapping the email shell here would nest a
+    full document inside another page. Falls back to a plain
+    bleach-cleaned render only if the import itself fails (e.g. an
+    in-tree refactor temporarily breaks ``hyacine.graph.send``); the
+    fallback is module-import-only and won't mask runtime errors.
+    """
     try:
-        from hyacine.graph.send import render_html_body
-        return render_html_body(text)
-    except NotImplementedError:
-        pass
-    raw = markdown.markdown(text, extensions=["extra", "tables", "fenced_code"])
-    return bleach.clean(raw, tags=_ALLOWED_TAGS, attributes=_ALLOWED_ATTRS, strip=False)
+        from hyacine.graph.send import render_html_fragment
+    except ImportError:
+        raw = markdown.markdown(text, extensions=["extra", "tables", "fenced_code"])
+        return bleach.clean(raw, tags=_ALLOWED_TAGS, attributes=_ALLOWED_ATTRS, strip=False)
+    return render_html_fragment(text)
 
 
 @router.get("/{run_id}", response_class=HTMLResponse)
