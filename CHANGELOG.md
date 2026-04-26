@@ -4,6 +4,66 @@ All notable changes to Hyacine are listed here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] — 2026-04-26
+
+Email pipeline cut: the daily digest gets HyacineAI's design language
+(pansy header, hero serif title, color-bar section titles, three-segment
+footer with provider/model) across Apple Mail, Gmail web, iOS Mail, and
+Outlook 2016+. Plus security + correctness hardening on the renderer
+(escape config-derived strings before interpolating into HTML, harden
+the anchor regex against quoted `>`, drop dead exception-swallowing
+fallback in the run-detail view), end-to-end language plumbing
+(`<html lang>` reflects the configured language with a sensible
+fallback), a new public `hyacine.i18n` module, and dry-run preview
+parity with real sends.
+
+### Added
+
+- **Modern HTML email shell.** New `hyacine.graph.email_render` module
+  wraps the LLM markdown in HyacineAI's design language — header carries
+  date + localised weekday, section titles take their color bar from the
+  prompt template's emoji prefixes (🔴/🟡/🟢/⚪), footer surfaces the
+  active provider/model. All inline styles, no external assets.
+- **`hyacine.i18n` module.** New public `weekday_label(dt, language)`
+  helper supporting `en`, `zh-CN`, `zh-TW`, `ja` (English fallback for
+  unknown codes); previously a private helper inside `pipeline.run`.
+- **`render_html_fragment` API.** Same sanitisation + design language
+  as `render_html_body` but skips the `<html>` shell so the FastAPI
+  run-detail view embeds without nesting documents inside a `<div>`.
+- **Per-language `<html lang>` attribute.** `render_modern_email_html`
+  accepts a `language` argument and maps YAML config codes to BCP-47
+  tags so screen readers / client heuristics see the language the
+  digest was actually written in.
+
+### Fixed
+
+- **Run-detail view nested a full HTML document inside a `<div>`.**
+  Switched the markdown renderer to `render_html_fragment` so the
+  embedded body is now a clean fragment.
+- **Dry-run wizard preview footer drifted from the real send.** Preview
+  now reads `language` and `timezone` from the YAML config and computes
+  `now` in that zone, going through the same `weekday_label` helper as
+  the pipeline. Run-time values (date / time / weekday) inherently
+  shift between preview and run; everything else now matches.
+- **Anchor styling regex terminated early on `>` inside quoted attrs.**
+  Pattern now treats quoted strings atomically so e.g. `title="a>b"`
+  no longer breaks link styling.
+- **Dead `NotImplementedError` fallback in `web/routes/runs.py`.**
+  `render_html_fragment` never raises it; the catch was masking
+  unrelated runtime errors. Restricted to module-import-only.
+- **Unknown language codes leaked into `<html lang>`.** `_bcp47` now
+  defaults to `en` when the config language isn't one we localise,
+  matching the docstring contract.
+
+### Changed
+
+- Pipeline forwards `model`, local `date` / `weekday` / `time`, and
+  `language` into `send_email` so the modern footer reflects the
+  per-run config.
+- Version bumped to 1.2.0 across `pyproject.toml`, `desktop/package.json`,
+  `desktop/package-lock.json`, `desktop/src-tauri/tauri.conf.json`,
+  `desktop/src-tauri/Cargo.toml`, and `desktop/src-tauri/Cargo.lock`.
+
 ## [1.1.0] — 2026-04-23
 
 Release-engineering cut that makes the desktop wizard end-to-end usable,

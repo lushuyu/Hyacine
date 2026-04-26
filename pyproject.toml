@@ -1,6 +1,6 @@
 [project]
 name = "hyacine"
-version = "1.1.0"
+version = "1.2.0"
 description = "Hyacine — daily Outlook + Claude report delivered to your inbox"
 requires-python = ">=3.11,<3.13"
 dependencies = [
