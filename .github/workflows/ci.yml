@@ -277,7 +277,7 @@ jobs:
           CI: 'true'
 
       - name: Upload installer
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: hyacine-${{ env.BUNDLE_VERSION }}-${{ matrix.target }}
           path: ${{ matrix.artifact-glob }}
