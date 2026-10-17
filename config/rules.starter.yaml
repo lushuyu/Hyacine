@@ -71,9 +71,8 @@ rules:
     subject_regex: '\b(newsletters?|weekly digest|monthly digest|roundup)\b'
     category: newsletter
 
-  - name: newsletter-unsubscribe
-    subject_regex: 'unsubscribe'
-    category: newsletter
+  # No bare "unsubscribe" rule: "You have unsubscribed from transaction
+  # alerts" is an account-security signal, not a newsletter.
 
   # --- Receipts & billing ---
   # Before marketing, so a receipt that also advertises a discount stays a receipt.
@@ -85,9 +84,11 @@ rules:
   # No sender-only noreply@ rule: security alerts, banks and universities send
   # from noreply@ too. To catch noreply promos, pair sender_email with a
   # promo subject_regex in the same rule.
-  # Not "offer" / "deal": "Offer of Admission", "deal with this".
+  # Not "offer" / "deal": "Offer of Admission", "deal with this". Not a bare
+  # "sale" / "coupon" / "discount" either: "You made a sale", "Sale and
+  # Purchase Agreement", a bond's coupon payment, a student discount check.
   - name: marketing-promo
-    subject_regex: '\b(sale|\d+\s?% off|discounts?|promos?|coupons?|limited[- ]time)\b'
+    subject_regex: '\b(flash sale|on sale|sale ends|\d+\s?% off|(promo|coupon|discount) codes?|limited[- ]time|members?[- ]only)\b'
     category: marketing
 
   # --- Review requests ---

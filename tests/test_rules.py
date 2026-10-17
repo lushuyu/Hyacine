@@ -390,6 +390,15 @@ class TestStarterRules:
              CategoryHint.OTHER),
             ("events@vendor.example.com", "You're invited: an exclusive preview",
              CategoryHint.OTHER),
+            ("transaction@shop.example.com", "You made a sale on Etsy - ship by Oct 20",
+             CategoryHint.OTHER),
+            ("legal@firm.example.com", "Sale and Purchase Agreement - signing date",
+             CategoryHint.OTHER),
+            ("ops@bank.example.com", "Coupon payment advice - SGS bond", CategoryHint.OTHER),
+            ("it@uni.example.edu", "Your student discount needs to be re-verified",
+             CategoryHint.OTHER),
+            ("alerts@bank.example.com", "You have unsubscribed from transaction alerts",
+             CategoryHint.OTHER),
         ],
     )
     def test_not_over_broad(
