@@ -127,6 +127,17 @@ systemctl --user restart hyacine-web.service
 The timer does not need a restart unless the unit file itself changed. A
 `daemon-reload` is only necessary if you modified unit files.
 
+The installed units are copies. When a release changes the templates in
+`src/hyacine/ops/systemd/`, merge the changes into your copies in
+`~/.config/systemd/user/` (keep your own path edits), then run
+`systemctl --user daemon-reload`. The run unit retries failed runs with
+`Restart=on-failure`, which needs systemd 244 or newer on a `Type=oneshot`
+unit (`systemctl --version`).
+
+To switch models, edit `llm_model` in `./config/config.yaml`; the next run
+picks it up. The default is `claude-opus-5-5`; the `claude` CLI also accepts
+aliases such as `opus` or `sonnet`.
+
 Your personal state (`./.env`, `./config/*.yaml`, `./prompts/hyacine.md`,
 `./data/`) is gitignored and untouched by `git pull`.
 

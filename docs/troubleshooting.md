@@ -84,8 +84,16 @@ lives. Default: `~/hyacine/.env`.
 ### `claude subprocess timed out`
 
 Bump `llm_timeout_seconds` in `./config/config.yaml`. Default 300 is usually
-enough — if you hit this frequently, your fetch window is probably too large
-(reduce `fetch_max_emails`).
+enough — if you hit this frequently, your fetch window is probably too large.
+The fetch keeps at most the newest 1000 messages per window and logs a
+`fetch_emails truncated` warning when it hits that cap (`fetch_max_emails` is
+not enforced yet). After a long outage you can shrink the catch-up window by
+moving the watermark forward:
+
+```bash
+sqlite3 ./data/hyacine.db \
+    "UPDATE watermark SET value='2026-10-17T00:00:00+00:00' WHERE key='last_successful_run_at';"
+```
 
 ### `claude returned an error`
 
@@ -94,6 +102,23 @@ Inspect the full error dict in the traceback. Common causes:
 - **Daily usage cap hit** on your Claude Code subscription. Wait or upgrade.
 - **Model name invalid**. Check `llm_model` in `config.yaml`.
 - **Token revoked**. Regenerate with `claude setup-token`.
+
+### Tuning the `claude -p` run: effort and safe mode
+
+The CLI provider pins two Claude Code settings through the environment so the
+daily run doesn't depend on how you use Claude Code interactively on the same
+host:
+
+- `CLAUDE_CODE_EFFORT_LEVEL` comes from `HYACINE_CLAUDE_EFFORT` in `./.env`
+  (`low` / `medium` / `high` / `xhigh` / `max`, default `high`). Lower it if
+  runs get slow, raise it if the digest misses nuance.
+- `CLAUDE_CODE_SAFE_MODE=1` stops the run from loading your `~/.claude`
+  customizations — CLAUDE.md, hooks, plugins, MCP servers, output styles.
+  Auth and model selection work as usual. Set `HYACINE_CLAUDE_SAFE_MODE=0`
+  only if the run genuinely needs one of those.
+
+The subprocess also runs from an empty temporary directory, so it doesn't pick
+up the checkout's git status or a project-level CLAUDE.md.
 
 ### `FileNotFoundError: 'claude'` under systemd
 
@@ -234,7 +259,10 @@ systemctl --user list-timers
 ```
 
 The timer with `Persistent=true` shows the next fire time. If it missed today,
-it fires on the next network-online event.
+it fires as soon as the user manager starts. A run that fails because the
+network isn't up yet (or on any other transient error) is retried by the
+unit's `Restart=on-failure`, 15 minutes apart and at most twice. `Restart=` on
+a `Type=oneshot` unit needs systemd 244 or newer.
 
 ## Monitoring silent failures
 
