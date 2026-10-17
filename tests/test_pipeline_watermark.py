@@ -1,6 +1,7 @@
 """Tests for watermark lifecycle and end-to-end pipeline gating."""
 from __future__ import annotations
 
+import json
 import os
 import signal
 import sqlite3
@@ -16,7 +17,8 @@ import pytest
 from hyacine import db as db_module
 from hyacine.db import Run, Watermark, init_db, session_scope
 from hyacine.graph._http import GraphHTTPError
-from hyacine.models import EmailMessage, RunStatus
+from hyacine.graph.fetch import FetchedEmails
+from hyacine.models import EmailMessage, RunRecord, RunStatus
 from hyacine.pipeline import run as run_module
 
 
@@ -810,3 +812,152 @@ class TestSigtermMarksRunFailed:
             "RunTerminated: terminated by SIGTERM (systemd TimeoutStartSec or stop)"
         )
         assert capsys.readouterr().out.startswith("FAIL: ")
+
+
+def _newest_first(n: int) -> list[EmailMessage]:
+    """``n`` emails ordered like fetch_emails returns them: "Mail 0" is newest."""
+    return [
+        EmailMessage(
+            id=f"e{i}",
+            subject=f"Mail {i}",
+            sender_email="a@b.com",
+            sender_domain="b.com",
+            received_at=datetime(2024, 6, 15, 1, 0, tzinfo=UTC) - timedelta(hours=i),
+        )
+        for i in range(n)
+    ]
+
+
+class TestFetchMaxEmailsCap:
+    """fetch_max_emails caps what reaches the LLM, keeping the newest mail.
+    Anything left out (by the cap or by fetch's own page cap) is stated on the
+    LLM user turn and on stderr; the watermark still advances to now.
+    """
+
+    _WINDOW_START = datetime(2024, 6, 10, 0, 0, tzinfo=UTC)  # 08:00 in Singapore
+
+    def _run(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        fetched: list[EmailMessage],
+        cap: int,
+    ) -> tuple[RunRecord, dict[str, Any], Path]:
+        db_path = _patch_settings(monkeypatch, tmp_path)
+        from hyacine.config import YamlConfig
+
+        cfg = YamlConfig(
+            recipient_email="test@example.com",
+            timezone="Asia/Singapore",
+            llm_model="sonnet",
+            llm_timeout_seconds=10,
+            fetch_max_emails=cap,
+        )
+        monkeypatch.setattr(run_module, "_get_cfg", lambda: cfg)
+
+        captured: dict[str, Any] = {}
+
+        def fake_summarize(json_input: str, prompt_path: Path, **kwargs: Any) -> str:
+            captured["subjects"] = [e["subject"] for e in json.loads(json_input)["emails"]]
+            captured["user_message"] = kwargs["user_message"]
+            return "# Daily report"
+
+        _patch_phases(monkeypatch, send=lambda *a, **kw: "msg-id-cap", summarize=fake_summarize)
+        monkeypatch.setattr("hyacine.graph.fetch.fetch_emails", lambda *a, **kw: fetched)
+        run_module.advance_watermark(self._WINDOW_START)
+
+        record = run_module.run_pipeline(now_utc=_NOW)
+        return record, captured, db_path
+
+    def test_cap_keeps_the_newest_and_notes_the_omission(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        record, captured, db_path = self._run(
+            tmp_path, monkeypatch, fetched=_newest_first(5), cap=3
+        )
+
+        assert record.status == RunStatus.SUCCESS
+        assert record.email_count == 3
+        assert captured["subjects"] == ["Mail 0", "Mail 1", "Mail 2"]
+        message = captured["user_message"]
+        assert message.startswith("Generate the daily report from the JSON on stdin.")
+        assert (
+            "NOTE: 2 older email(s) received since 2024-06-10 08:00 (Asia/Singapore) "
+            "are not in the JSON: it holds only the newest 3 of this window"
+        ) in message
+        err = capsys.readouterr().err
+        assert err.startswith("WARN: 2 older email(s) received since 2024-06-10T00:00:00+00:00")
+        assert "kept the newest 3 (fetch_max_emails=3)" in err
+        # Visible truncation, not deferral: the watermark still moves to now.
+        assert _stored_watermark(db_path) == _NOW.isoformat()
+
+    @pytest.mark.parametrize(("fetched", "cap"), [(3, 3), (2, 500)])
+    def test_no_note_when_nothing_is_dropped(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        fetched: int,
+        cap: int,
+    ) -> None:
+        record, captured, _ = self._run(
+            tmp_path, monkeypatch, fetched=_newest_first(fetched), cap=cap
+        )
+
+        assert record.email_count == fetched
+        assert len(captured["subjects"]) == fetched
+        assert "NOTE" not in captured["user_message"]
+        assert "WARN" not in capsys.readouterr().err
+
+    def test_page_cap_hit_says_at_least(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        fetched = FetchedEmails(_newest_first(5))
+        fetched.page_cap_hit = True
+
+        _, captured, _ = self._run(tmp_path, monkeypatch, fetched=fetched, cap=3)
+
+        assert captured["subjects"] == ["Mail 0", "Mail 1", "Mail 2"]
+        assert "NOTE: at least 2 older email(s) received since 2024-06-10 08:00" in (
+            captured["user_message"]
+        )
+        err = capsys.readouterr().err
+        assert err.startswith("WARN: at least 2 older email(s)")
+        assert "(fetch_max_emails=3, fetch page cap hit)" in err
+
+    def test_page_cap_hit_with_nothing_dropped_by_the_cap(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        fetched = FetchedEmails(_newest_first(3))
+        fetched.page_cap_hit = True
+
+        _, captured, _ = self._run(tmp_path, monkeypatch, fetched=fetched, cap=500)
+
+        assert len(captured["subjects"]) == 3
+        assert (
+            "NOTE: an unknown number of older email(s) received since 2024-06-10 08:00"
+        ) in captured["user_message"]
+        assert "it holds only the newest 3 of this window" in captured["user_message"]
+        assert capsys.readouterr().err.startswith("WARN: an unknown number of older email(s)")
+
+    @pytest.mark.parametrize("cap", [0, -5])
+    def test_cap_below_one_still_keeps_the_newest_email(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cap: int
+    ) -> None:
+        record, captured, _ = self._run(
+            tmp_path, monkeypatch, fetched=_newest_first(4), cap=cap
+        )
+
+        assert record.status == RunStatus.SUCCESS
+        assert captured["subjects"] == ["Mail 0"]
+        assert "NOTE: 3 older email(s) received since" in captured["user_message"]

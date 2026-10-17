@@ -413,7 +413,7 @@ def test_fetch_emails_warns_when_page_cap_hit(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Hitting max_pages with nextLink still set must be visible in the log."""
-    from hyacine.graph.fetch import fetch_emails
+    from hyacine.graph.fetch import FetchedEmails, fetch_emails
 
     def handler(request: httpx.Request) -> httpx.Response:
         return _folder_ids(request) or httpx.Response(200, json={
@@ -427,6 +427,9 @@ def test_fetch_emails_warns_when_page_cap_hit(
         result = fetch_emails(_make_cred(), _SINCE, _UNTIL, max_pages=1)
 
     assert len(result) == 2
+    # run.py reads this to say "at least N" older emails were left out.
+    assert isinstance(result, FetchedEmails)
+    assert result.page_cap_hit is True
     [record] = [r for r in caplog.records if "page cap" in r.getMessage()]
     message = record.getMessage()
     assert "1-page cap" in message
@@ -438,7 +441,7 @@ def test_fetch_emails_no_page_cap_warning_when_exhausted(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
 ) -> None:
     """No warning when the last page has no nextLink."""
-    from hyacine.graph.fetch import fetch_emails
+    from hyacine.graph.fetch import FetchedEmails, fetch_emails
 
     def handler(request: httpx.Request) -> httpx.Response:
         return _folder_ids(request) or httpx.Response(200, json={"value": [_message("m1", "Hi")]})
@@ -446,6 +449,8 @@ def test_fetch_emails_no_page_cap_warning_when_exhausted(
     _route_graph(monkeypatch, handler)
 
     with caplog.at_level(logging.WARNING, logger="hyacine.graph.fetch"):
-        fetch_emails(_make_cred(), _SINCE, _UNTIL, max_pages=1)
+        result = fetch_emails(_make_cred(), _SINCE, _UNTIL, max_pages=1)
 
     assert not [r for r in caplog.records if "page cap" in r.getMessage()]
+    assert isinstance(result, FetchedEmails)
+    assert result.page_cap_hit is False
