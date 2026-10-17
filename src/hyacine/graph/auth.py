@@ -38,12 +38,15 @@ from __future__ import annotations
 import os
 import stat
 import sys
+import time
 import webbrowser
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any, NamedTuple
 
 from azure.identity import (
     AuthenticationRecord,
+    AuthenticationRequiredError,
     DeviceCodeCredential,
     InteractiveBrowserCredential,
     TokenCachePersistenceOptions,
@@ -190,6 +193,7 @@ def load_or_create_record(
     auth_mode: str = AUTH_MODE_DEVICE_CODE,
     redirect_port: int = DEFAULT_REDIRECT_PORT,
     allow_interactive: bool = True,
+    record_path: Path | None = None,
 ) -> tuple[GraphCredential, AuthenticationRecord]:
     """High-level helper: if record exists, load it; else run the interactive flow.
 
@@ -205,8 +209,14 @@ def load_or_create_record(
     cache miss or a revoked refresh token raises AuthenticationRequiredError
     immediately instead of starting a flow nobody is present to complete.
     Unattended callers must set it.
+
+    ``record_path`` defaults to ``auth_dir / "auth_record.json"``. Callers
+    holding a ``Settings`` must pass ``settings.auth_record_path`` so a
+    ``HYACINE_AUTH_RECORD_PATH`` override reaches the same file that
+    ``scripts/bootstrap_auth.py`` writes.
     """
-    record_path = auth_dir / "auth_record.json"
+    if record_path is None:
+        record_path = auth_dir / "auth_record.json"
     existing = load_authentication_record(record_path)
 
     if existing is not None:
@@ -240,15 +250,83 @@ def load_or_create_record(
     return cred, record
 
 
+class RefreshCheck(NamedTuple):
+    """Outcome of :func:`redeem_refresh_token`."""
+
+    #: POSIX timestamp at which the issued access token expires.
+    expires_on: int
+    #: True when MSAL redeemed the cached refresh token at the token endpoint.
+    #: False when the fallback ``get_token()`` answered instead, which may have
+    #: been a still-valid cached access token that never touched the refresh
+    #: token.
+    refresh_token_redeemed: bool
+
+
+def redeem_refresh_token(
+    cred: GraphCredential, record: AuthenticationRecord, scopes: list[str]
+) -> RefreshCheck:
+    """Acquire a token for ``scopes`` by redeeming the cached refresh token.
+
+    ``cred.get_token()`` alone proves little: MSAL hands back any cached
+    access token with more than five minutes left without a network call, so a
+    revoked or policy-blocked refresh token goes unnoticed for the rest of
+    that token's 60-90 minute lifetime. The scheduled run always has to
+    refresh, so this skips the access-token cache (MSAL ``force_refresh``).
+
+    azure-identity reaches its MSAL app only through the private
+    ``_get_app()`` (checked against azure-identity 1.25). If that hook has
+    gone or changed shape, this falls back to ``get_token()`` and returns
+    ``refresh_token_redeemed=False``.
+
+    Never prompts. Raises AuthenticationRequiredError when the cache holds no
+    account matching ``record`` or Entra ID refuses the refresh token.
+    """
+    try:
+        app = cred._get_app()
+        accounts = [
+            account
+            for account in app.get_accounts(username=record.username)
+            if account.get("home_account_id") == record.home_account_id
+        ]
+    except (AttributeError, TypeError):
+        return _get_token_fallback(cred, scopes)
+
+    result: dict[str, Any] | None = None
+    for account in accounts:
+        now = int(time.time())
+        try:
+            result = app.acquire_token_silent_with_error(
+                list(scopes), account=account, force_refresh=True
+            )
+        except TypeError:
+            return _get_token_fallback(cred, scopes)
+        if result and "access_token" in result and "expires_in" in result:
+            return RefreshCheck(now + int(result["expires_in"]), refresh_token_redeemed=True)
+
+    if result:
+        detail = result.get("error_description") or result.get("error") or "no access token"
+        raise AuthenticationRequiredError(scopes, message=f"refresh token refused: {detail}")
+    raise AuthenticationRequiredError(
+        scopes, message=f"no cached refresh token for {record.username}"
+    )
+
+
+def _get_token_fallback(cred: GraphCredential, scopes: list[str]) -> RefreshCheck:
+    token = cred.get_token(*scopes)
+    return RefreshCheck(token.expires_on, refresh_token_redeemed=False)
+
+
 __all__ = [
     "AUTH_MODE_DEVICE_CODE",
     "AUTH_MODE_INTERACTIVE_BROWSER",
     "DEFAULT_REDIRECT_PORT",
     "GraphCredential",
+    "RefreshCheck",
     "build_credential",
     "load_authentication_record",
     "save_authentication_record",
     "load_or_create_record",
+    "redeem_refresh_token",
     "use_console_browser",
     "AuthenticationRecord",
     "DeviceCodeCredential",

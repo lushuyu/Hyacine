@@ -221,6 +221,7 @@ def run_pipeline(
             auth_mode=settings.graph_auth_mode,
             redirect_port=settings.graph_redirect_port,
             allow_interactive=False,
+            record_path=settings.auth_record_path,
         )
         emails = fetch_emails(cred, watermark, now_utc)
         calendar = fetch_calendar(cred, now_local.date(), timezone_name=cfg.timezone)

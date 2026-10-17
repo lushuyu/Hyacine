@@ -5,12 +5,23 @@ Body:    minimal HTML with timestamp.
 
 Only proceed after explicit interactive confirmation; this script REQUIRES
 stdin interaction (press `y` + Enter) before any POST to Graph.
+
+It never signs in. It uses the same silent-only credential as the scheduled
+run (auth mode, redirect port and auth record path from Settings) and checks
+the cached token before asking to send, so a missing or dead sign-in fails
+fast with a pointer to scripts/bootstrap_auth.py.
 """
 from __future__ import annotations
 
 import os
 import sys
 from datetime import UTC, datetime
+
+_GRAPH_SCOPE = "https://graph.microsoft.com/.default"
+_BOOTSTRAP_HINT = (
+    "run `python scripts/bootstrap_auth.py` to sign in "
+    "(it uses HYACINE_GRAPH_AUTH_MODE)"
+)
 
 
 def _is_preconfirmed(argv: list[str]) -> bool:
@@ -26,6 +37,8 @@ def _is_preconfirmed(argv: list[str]) -> bool:
 
 def main() -> int:
     try:
+        from azure.identity import AuthenticationRequiredError
+
         from hyacine.config import Settings, load_yaml_config
         from hyacine.graph.auth import load_or_create_record
         from hyacine.graph.send import send_email
@@ -37,15 +50,34 @@ def main() -> int:
         settings = Settings()
         yaml_cfg = load_yaml_config(settings.config_path)
         recipient = yaml_cfg.recipient_email
+    except Exception as exc:  # noqa: BLE001
+        print(f"Setup failed: {exc}", file=sys.stderr)
+        return 1
 
+    record_path = settings.auth_record_path
+    if not record_path.exists():
+        print(f"No Graph sign-in found at {record_path}; {_BOOTSTRAP_HINT}.", file=sys.stderr)
+        return 1
+
+    try:
         _cred, _record = load_or_create_record(
             settings.graph_client_id,
             settings.graph_tenant_id,
             settings.auth_dir,
             settings.scope_list,
+            auth_mode=settings.graph_auth_mode,
+            redirect_port=settings.graph_redirect_port,
+            allow_interactive=False,
+            record_path=record_path,
         )
+        # Fail here, before the confirmation prompt, rather than as a generic
+        # sendMail error after the user has said yes.
+        _cred.get_token(_GRAPH_SCOPE)
+    except AuthenticationRequiredError as exc:
+        print(f"Cached Graph token is unusable; {_BOOTSTRAP_HINT}.\n  {exc}", file=sys.stderr)
+        return 1
     except Exception as exc:  # noqa: BLE001
-        print(f"Setup failed: {exc}", file=sys.stderr)
+        print(f"Graph credential check failed: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
 
     print(f"Target recipient: {recipient}")

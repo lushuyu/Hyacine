@@ -207,6 +207,26 @@ class TestWatermarkAdvancesOnlyOnSuccess:
         assert captured["auth_mode"] == "device_code"
         assert alerts == []
 
+    def test_run_reads_the_configured_auth_record_path(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """HYACINE_AUTH_RECORD_PATH must reach the file bootstrap_auth.py writes."""
+        _patch_settings(monkeypatch, tmp_path)
+        custom = tmp_path / "elsewhere" / "rec.json"
+        monkeypatch.setattr(run_module._get_settings(), "auth_record_path", custom)
+        captured: dict[str, object] = {}
+
+        def fake_load(*args: object, **kwargs: object) -> tuple[object, object]:
+            captured.update(kwargs)
+            return object(), object()
+
+        _patch_phases(monkeypatch, send=lambda *a, **kw: "msg-id-001")
+        monkeypatch.setattr("hyacine.graph.auth.load_or_create_record", fake_load)
+
+        run_module.run_pipeline(now_utc=_NOW)
+
+        assert captured["record_path"] == custom
+
     def test_llm_receives_trimmed_payload(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

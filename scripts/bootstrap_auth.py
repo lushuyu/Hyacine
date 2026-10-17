@@ -13,9 +13,12 @@ open a tunnel from the machine that has the browser first:
 then run this script over that session. It prints the auth URL; the redirect
 comes back through the tunnel to the loopback server on the host.
 
-This script always finishes by acquiring a real token. It reports success
-only when Graph actually issued one — a persisted auth_record.json on its own
-proves nothing, since loading a record does no network I/O.
+This script always finishes by acquiring a real token, and it gets that
+token by redeeming the cached refresh token (MSAL ``force_refresh``). The
+scheduled run always has to refresh, so that is what success here proves. A
+persisted auth_record.json proves nothing on its own, since loading a record
+does no network I/O, and neither does a plain ``get_token()``: it can be
+answered by a still-valid cached access token while the refresh token is dead.
 """
 from __future__ import annotations
 
@@ -24,6 +27,10 @@ import shutil
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from hyacine.graph.auth import RefreshCheck
 
 
 def _backup_and_remove(path: Path) -> None:
@@ -46,7 +53,7 @@ def main() -> int:
     parser.add_argument(
         "--check",
         action="store_true",
-        help="verify the cached token silently; never start an interactive flow",
+        help="verify the cached refresh token silently; never start an interactive flow",
     )
     parser.add_argument(
         "--reset",
@@ -63,6 +70,7 @@ def main() -> int:
             AUTH_MODE_INTERACTIVE_BROWSER,
             build_credential,
             load_authentication_record,
+            redeem_refresh_token,
             save_authentication_record,
             use_console_browser,
         )
@@ -89,7 +97,7 @@ def main() -> int:
         _backup_and_remove(_msal_cache_path())
         print()
 
-    # --- Step 1: try silent refresh against whatever is cached ---
+    # --- Step 1: redeem the cached refresh token (never prompts) ---
     record = load_authentication_record(record_path)
     if record is not None:
         silent = build_credential(
@@ -102,13 +110,13 @@ def main() -> int:
             redirect_port=settings.graph_redirect_port,
         )
         try:
-            token = silent.get_token(*settings.scope_list)
+            check = redeem_refresh_token(silent, record, settings.scope_list)
         except AuthenticationRequiredError as exc:
             print(f"Cached token unusable — interactive sign-in required.\n  {exc}\n")
         except Exception as exc:  # noqa: BLE001
             print(f"Cached token unusable: {type(exc).__name__}: {exc}\n")
         else:
-            _report_ok(record.username, token.expires_on, record_path)
+            _report_ok(record.username, check, record_path)
             return 0
     else:
         print(f"No auth record at {record_path}.\n")
@@ -138,9 +146,9 @@ def main() -> int:
 
     save_authentication_record(new_record, record_path)
 
-    # --- Step 3: prove the new credential actually yields a token ---
+    # --- Step 3: prove the new refresh token can be redeemed ---
     try:
-        token = cred.get_token(*settings.scope_list)
+        check = redeem_refresh_token(cred, new_record, settings.scope_list)
     except Exception as exc:  # noqa: BLE001
         print(
             f"Signed in as {new_record.username}, but token acquisition still "
@@ -149,16 +157,26 @@ def main() -> int:
         )
         return 1
 
-    _report_ok(new_record.username, token.expires_on, record_path)
+    _report_ok(new_record.username, check, record_path)
     return 0
 
 
-def _report_ok(username: str, expires_on: int, record_path: Path) -> None:
+def _report_ok(username: str, check: RefreshCheck, record_path: Path) -> None:
     import stat
 
-    expiry = datetime.fromtimestamp(expires_on, tz=UTC)
+    expiry = datetime.fromtimestamp(check.expires_on, tz=UTC)
     print(f"OK: Graph issued an access token for {username}")
-    print(f"    expires {expiry.isoformat()} ({expires_on})")
+    print(f"    expires {expiry.isoformat()} ({check.expires_on})")
+    if check.refresh_token_redeemed:
+        print("    issued by redeeming the cached refresh token")
+    else:
+        print(
+            "NOTE: could not force a refresh on this azure-identity version, so a "
+            "still-valid cached access token may have answered and the refresh "
+            "token was not verified. Re-run once that token expires (up to ~90 "
+            "min) to be sure.",
+            file=sys.stderr,
+        )
 
     mode = stat.S_IMODE(record_path.stat().st_mode)
     if mode != 0o600:
