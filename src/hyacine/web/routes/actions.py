@@ -1,8 +1,10 @@
 """POST /actions/run — trigger an ad-hoc run.
 
-Tries `systemctl --user start hyacine-run.service` first. Falls back to a
-detached `python -m hyacine.pipeline.run` when systemd user isn't available
-(e.g. plain WSL shells without `loginctl enable-linger`).
+Tries `systemctl --user start --no-block hyacine-run.service` first. The unit
+is Type=oneshot, so a blocking start would wait out the whole 30-90 s run;
+--no-block only enqueues the job. Falls back to a detached
+`python -m hyacine.pipeline.run` when systemd user isn't available (e.g. plain
+WSL shells without `loginctl enable-linger`) or the unit isn't installed.
 """
 from __future__ import annotations
 
@@ -19,10 +21,21 @@ router = APIRouter(prefix="/actions")
 # __file__ is src/hyacine/web/routes/actions.py → go up 5 levels to repo root.
 _CODE_DIR: Path = Path(__file__).resolve().parents[4]
 
+_SYSTEMCTL_TIMEOUT_HTML = (
+    "<span>systemctl did not answer in time; the run may already be queued. "
+    "Check the dashboard or <code>systemctl --user status hyacine-run.service</code> "
+    "before retrying.</span>"
+)
+
 
 @router.post("/run", response_class=HTMLResponse)
 def trigger_run() -> HTMLResponse:
-    via = _try_systemctl()
+    try:
+        via = _try_systemctl()
+    except subprocess.TimeoutExpired:
+        # The start job may already be enqueued; spawning the fallback here
+        # would race it with a second concurrent pipeline.
+        return HTMLResponse(content=_SYSTEMCTL_TIMEOUT_HTML)
     if via is None:
         via = _spawn_subprocess()
     html = f"<span>Queued ({via})</span>"
@@ -31,10 +44,15 @@ def trigger_run() -> HTMLResponse:
 
 
 def _try_systemctl() -> str | None:
-    """Attempt systemctl --user start. Returns 'systemd' on success, None otherwise."""
+    """Enqueue hyacine-run.service via systemctl --user.
+
+    Returns 'systemd' on success, None when systemd user isn't usable (binary
+    missing, no user bus, unit not installed). TimeoutExpired propagates: the
+    job may already be queued, so the caller must not fall back.
+    """
     try:
         result = subprocess.run(
-            ["systemctl", "--user", "start", "hyacine-run.service"],
+            ["systemctl", "--user", "start", "--no-block", "hyacine-run.service"],
             check=False,
             capture_output=True,
             timeout=10,
@@ -42,7 +60,7 @@ def _try_systemctl() -> str | None:
         if result.returncode == 0:
             return "systemd"
         return None
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+    except FileNotFoundError:
         return None
 
 
