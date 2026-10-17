@@ -8,10 +8,12 @@ No auth — LOCAL DEV ONLY. Bind to 127.0.0.1. Do not expose to the network.
 Because there is no auth, any page open in the operator's browser could
 auto-submit a form to the localhost UI. A middleware rejects cross-site
 writes using Sec-Fetch-Site / Origin. Set HYACINE_WEB_ALLOWED_HOSTS
-(comma list) to additionally pin the accepted Host headers.
+(comma list of hostnames; a pasted ":port" or URL is reduced to its
+hostname) to additionally pin the accepted Host headers.
 """
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
@@ -33,6 +35,8 @@ _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 _TRUSTED_FETCH_SITES = frozenset({"same-origin", "none"})
 _LOOPBACK_HOSTS = ("127.0.0.1", "localhost")
 
+logger = logging.getLogger(__name__)
+
 
 def _is_cross_site(request: Request) -> bool:
     """True when the browser says the request came from another origin.
@@ -53,11 +57,60 @@ def _is_cross_site(request: Request) -> bool:
     return urlsplit(origin).netloc.lower() != host.lower()
 
 
+def _normalise_allowed_host(entry: str) -> str | None:
+    """Reduce one HYACINE_WEB_ALLOWED_HOSTS entry to the bare hostname.
+
+    TrustedHostMiddleware matches only the hostname (it drops ":port" from
+    the Host header), so "box.ts.net:8765" as copied from the address bar
+    would never match and every request would get a 400. Returns None, with
+    a warning, for an unusable entry; an invalid wildcard would otherwise
+    make the middleware raise at startup.
+    """
+    value = entry.strip().lower()
+    try:
+        # Without a scheme, a "//" prefix makes urlsplit parse it as a netloc.
+        netloc = urlsplit(value if "://" in value else "//" + value).netloc
+    except ValueError as exc:  # e.g. "[not-an-ip]:8765"
+        logger.warning("Ignoring HYACINE_WEB_ALLOWED_HOSTS entry %r: %s", entry.strip(), exc)
+        return None
+    host = netloc.rpartition("@")[2]  # drop userinfo
+    if host.startswith("["):
+        host = host[1:].partition("]")[0]  # "[v6]:port"
+    elif host.count(":") == 1:
+        host = host.partition(":")[0]  # "name:port"; a bare IPv6 has several
+    if not host:
+        logger.warning("Ignoring HYACINE_WEB_ALLOWED_HOSTS entry %r: no hostname", entry.strip())
+        return None
+    # Same rule TrustedHostMiddleware asserts on.
+    if "*" in host[1:] or (host.startswith("*") and host != "*" and not host.startswith("*.")):
+        logger.warning(
+            "Ignoring HYACINE_WEB_ALLOWED_HOSTS entry %r: "
+            "a wildcard must be a leading '*.' or a bare '*'",
+            entry.strip(),
+        )
+        return None
+    return host
+
+
 def _allowed_hosts_from_env() -> list[str] | None:
-    """Parse HYACINE_WEB_ALLOWED_HOSTS; None (no Host pinning) when unset or blank."""
+    """Parse HYACINE_WEB_ALLOWED_HOSTS; None (no Host pinning) when unset or blank.
+
+    Also None when every entry is unusable: pinning to loopback alone would
+    lock out the tailnet access the setting was meant for.
+    """
     raw = os.environ.get("HYACINE_WEB_ALLOWED_HOSTS", "")
-    hosts = [h.strip().lower() for h in raw.split(",") if h.strip()]
+    entries = [e for e in raw.split(",") if e.strip()]
+    if not entries:
+        return None
+    hosts: list[str] = []
+    for entry in entries:
+        host = _normalise_allowed_host(entry)
+        if host is not None and host not in hosts:
+            hosts.append(host)
     if not hosts:
+        logger.warning(
+            "HYACINE_WEB_ALLOWED_HOSTS has no usable entries; Host pinning is disabled"
+        )
         return None
     return hosts + [h for h in _LOOPBACK_HOSTS if h not in hosts]
 

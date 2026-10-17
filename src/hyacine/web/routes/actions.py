@@ -2,9 +2,13 @@
 
 Tries `systemctl --user start --no-block hyacine-run.service` first. The unit
 is Type=oneshot, so a blocking start would wait out the whole 30-90 s run;
---no-block only enqueues the job. Falls back to a detached
-`python -m hyacine.pipeline.run` when systemd user isn't available (e.g. plain
-WSL shells without `loginctl enable-linger`) or the unit isn't installed.
+--no-block only enqueues the job. It runs `reset-failed` first: the unit's
+StartLimitBurst counts every start, so a few manual runs (or three failed
+attempts) would otherwise get the click refused with start-limit-hit.
+
+Falls back to a detached `python -m hyacine.pipeline.run` when systemd user
+isn't available (e.g. plain WSL shells without `loginctl enable-linger`) or
+the unit isn't installed.
 """
 from __future__ import annotations
 
@@ -47,10 +51,20 @@ def _try_systemctl() -> str | None:
     """Enqueue hyacine-run.service via systemctl --user.
 
     Returns 'systemd' on success, None when systemd user isn't usable (binary
-    missing, no user bus, unit not installed). TimeoutExpired propagates: the
-    job may already be queued, so the caller must not fall back.
+    missing, no user bus, unit not installed). TimeoutExpired from either
+    call propagates: systemd is hung rather than absent and the job may
+    already be queued, so the caller must not fall back.
     """
     try:
+        # A deliberate manual run overrides the retry budget: clear the start
+        # rate-limit counter (and any failed state) first. The result is
+        # ignored; if systemd is unusable, the start below says so.
+        subprocess.run(
+            ["systemctl", "--user", "reset-failed", "hyacine-run.service"],
+            check=False,
+            capture_output=True,
+            timeout=10,
+        )
         result = subprocess.run(
             ["systemctl", "--user", "start", "--no-block", "hyacine-run.service"],
             check=False,

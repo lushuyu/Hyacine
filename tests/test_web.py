@@ -1,6 +1,7 @@
 """Web UI tests — uses FastAPI TestClient with a tmp_path DB and content files."""
 from __future__ import annotations
 
+import logging
 import subprocess
 from collections.abc import Callable, Generator
 from datetime import UTC, datetime
@@ -261,6 +262,10 @@ def test_actions_run_falls_back_when_systemctl_missing(
     assert "hyacine.pipeline.run" in popen_calls[0]
 
 
+_RESET_FAILED = ["systemctl", "--user", "reset-failed", "hyacine-run.service"]
+_START = ["systemctl", "--user", "start", "--no-block", "hyacine-run.service"]
+
+
 def _patch_subprocess(
     monkeypatch: pytest.MonkeyPatch,
     run_impl: Callable[[list[str]], subprocess.CompletedProcess[bytes]],
@@ -298,10 +303,9 @@ def test_actions_run_queues_via_systemd_without_blocking(
     assert "Queued (systemd)" in resp.text
     assert resp.headers["HX-Trigger"] == "runQueued"
     # hyacine-run.service is Type=oneshot: without --no-block, start waits for
-    # the whole run and trips the 10 s timeout.
-    assert run_calls == [
-        ["systemctl", "--user", "start", "--no-block", "hyacine-run.service"]
-    ]
+    # the whole run and trips the 10 s timeout. reset-failed comes first so
+    # StartLimitBurst can't refuse a manual run.
+    assert run_calls == [_RESET_FAILED, _START]
     assert popen_calls == []
 
 
@@ -311,7 +315,9 @@ def test_actions_run_timeout_does_not_spawn_second_pipeline(
     tc = _make_app(tmp_path)
 
     def timeout(cmd: list[str]) -> subprocess.CompletedProcess[bytes]:
-        raise subprocess.TimeoutExpired(cmd, 10)
+        if cmd == _START:
+            raise subprocess.TimeoutExpired(cmd, 10)
+        return subprocess.CompletedProcess(cmd, 0)
 
     run_calls, popen_calls = _patch_subprocess(monkeypatch, timeout)
 
@@ -319,7 +325,7 @@ def test_actions_run_timeout_does_not_spawn_second_pipeline(
         resp = tc.post("/actions/run")
 
     assert resp.status_code == 200
-    assert len(run_calls) == 1
+    assert run_calls == [_RESET_FAILED, _START]
     assert popen_calls == []
     assert "Queued" not in resp.text
     assert "systemctl --user status hyacine-run.service" in resp.text
@@ -340,9 +346,76 @@ def test_actions_run_nonzero_exit_falls_back_to_subprocess(
 
     assert resp.status_code == 200
     assert "Queued (subprocess)" in resp.text
-    assert len(run_calls) == 1
+    assert run_calls == [_RESET_FAILED, _START]
     assert len(popen_calls) == 1
     assert "hyacine.pipeline.run" in popen_calls[0]
+
+
+def test_actions_run_resets_start_limit_and_ignores_its_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tc = _make_app(tmp_path)
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        calls.append((cmd, kwargs))
+        # A failing reset-failed (e.g. unit not loaded yet) must not block the start.
+        return subprocess.CompletedProcess(cmd, 1 if cmd == _RESET_FAILED else 0)
+
+    import hyacine.web.routes.actions as actions_mod
+    monkeypatch.setattr(actions_mod.subprocess, "run", fake_run)
+
+    with tc:
+        resp = tc.post("/actions/run")
+
+    assert resp.status_code == 200
+    assert "Queued (systemd)" in resp.text
+    assert [cmd for cmd, _ in calls] == [_RESET_FAILED, _START]
+    assert calls[0][1] == {"check": False, "capture_output": True, "timeout": 10}
+
+
+def test_actions_run_reset_failed_missing_systemctl_falls_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tc = _make_app(tmp_path)
+
+    def missing(cmd: list[str]) -> subprocess.CompletedProcess[bytes]:
+        raise FileNotFoundError("systemctl not found")
+
+    run_calls, popen_calls = _patch_subprocess(monkeypatch, missing)
+
+    with tc:
+        resp = tc.post("/actions/run")
+
+    assert resp.status_code == 200
+    assert "Queued (subprocess)" in resp.text
+    assert run_calls == [_RESET_FAILED]
+    assert len(popen_calls) == 1
+    assert "hyacine.pipeline.run" in popen_calls[0]
+
+
+def test_actions_run_reset_failed_timeout_does_not_spawn_pipeline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tc = _make_app(tmp_path)
+
+    def timeout(cmd: list[str]) -> subprocess.CompletedProcess[bytes]:
+        if cmd == _RESET_FAILED:
+            raise subprocess.TimeoutExpired(cmd, 10)
+        return subprocess.CompletedProcess(cmd, 0)
+
+    run_calls, popen_calls = _patch_subprocess(monkeypatch, timeout)
+
+    with tc:
+        resp = tc.post("/actions/run")
+
+    # A hung systemd is not "systemd missing": no unsupervised second run.
+    assert resp.status_code == 200
+    assert run_calls == [_RESET_FAILED]
+    assert popen_calls == []
+    assert "Queued" not in resp.text
+    assert "systemctl --user status hyacine-run.service" in resp.text
+    assert "HX-Trigger" not in resp.headers
 
 
 # ---------------------------------------------------------------------------
@@ -474,7 +547,7 @@ def test_same_origin_run_post_is_accepted(
 
     assert resp.status_code == 200
     assert "Queued (systemd)" in resp.text
-    assert len(run_calls) == 1
+    assert run_calls == [_RESET_FAILED, _START]
 
 
 @pytest.mark.parametrize("path", ["/", "/prompt", "/rules"])
@@ -517,3 +590,89 @@ def test_allowed_hosts_env_pins_host_header(
     assert listed.status_code == 200
     assert loopback_ip.status_code == 200
     assert loopback_name.status_code == 200
+
+
+def test_allowed_hosts_entry_with_port_matches_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Copied from the address bar; Starlette compares the Host header without
+    # its port, so the entry's port must be dropped too.
+    monkeypatch.setenv("HYACINE_WEB_ALLOWED_HOSTS", "myhost.ts.net:8765")
+    tc = _make_app(tmp_path)
+
+    with tc:
+        listed = tc.get("/", headers={"Host": "myhost.ts.net:8765"})
+        rebound = tc.get("/", headers={"Host": "attacker.example:8765"})
+
+    assert listed.status_code == 200
+    assert rebound.status_code == 400
+
+
+_LOOPBACK = ["127.0.0.1", "localhost"]
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        pytest.param("myhost.ts.net:8765", ["myhost.ts.net", *_LOOPBACK], id="port"),
+        pytest.param(
+            "http://user:pw@MyHost.ts.net:8765/runs?x=1", ["myhost.ts.net", *_LOOPBACK], id="url"
+        ),
+        pytest.param("https://myhost.ts.net", ["myhost.ts.net", *_LOOPBACK], id="url-no-port"),
+        pytest.param(" MyHost.TS.Net ", ["myhost.ts.net", *_LOOPBACK], id="uppercase"),
+        pytest.param("[FE80::1]:8765", ["fe80::1", *_LOOPBACK], id="ipv6-port"),
+        pytest.param("::1", ["::1", *_LOOPBACK], id="ipv6-bare"),
+        pytest.param("*.ts.net:8765", ["*.ts.net", *_LOOPBACK], id="wildcard-port"),
+        pytest.param("box:8765, BOX", ["box", *_LOOPBACK], id="dedupe"),
+        pytest.param("localhost:8765", ["localhost", "127.0.0.1"], id="loopback-listed"),
+        pytest.param("my*host, box.ts.net", ["box.ts.net", *_LOOPBACK], id="bad-wildcard"),
+        pytest.param("*host.ts.net, box.ts.net", ["box.ts.net", *_LOOPBACK], id="no-dot"),
+        pytest.param("[zz]:8765, :8765, box.ts.net", ["box.ts.net", *_LOOPBACK], id="no-host"),
+        pytest.param("", None, id="blank"),
+    ],
+)
+def test_allowed_hosts_entries_are_normalised(
+    monkeypatch: pytest.MonkeyPatch, raw: str, expected: list[str] | None
+) -> None:
+    from hyacine.web.app import _allowed_hosts_from_env  # noqa: PLC0415
+
+    monkeypatch.setenv("HYACINE_WEB_ALLOWED_HOSTS", raw)
+
+    assert _allowed_hosts_from_env() == expected
+
+
+def test_allowed_hosts_invalid_wildcard_is_skipped_with_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.WARNING, logger="hyacine.web.app")
+    monkeypatch.setenv("HYACINE_WEB_ALLOWED_HOSTS", "my*host, box.ts.net")
+    # Starlette asserts on a malformed wildcard; this used to crash startup.
+    tc = _make_app(tmp_path)
+
+    with tc:
+        listed = tc.get("/", headers={"Host": "box.ts.net"})
+        other = tc.get("/", headers={"Host": "myhost"})
+
+    assert listed.status_code == 200
+    assert other.status_code == 400
+    assert any(
+        "'my*host'" in r.getMessage() and "wildcard" in r.getMessage() for r in caplog.records
+    )
+
+
+def test_allowed_hosts_all_invalid_disables_pinning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from fastapi.middleware.trustedhost import TrustedHostMiddleware  # noqa: PLC0415
+
+    caplog.set_level(logging.WARNING, logger="hyacine.web.app")
+    monkeypatch.setenv("HYACINE_WEB_ALLOWED_HOSTS", "my*host, *bad.example")
+    tc = _make_app(tmp_path)
+
+    with tc:
+        resp = tc.get("/", headers={"Host": "box.tailnet.ts.net:8765"})
+
+    # Not locked down to loopback-only: the bad setting is treated as unset.
+    assert resp.status_code == 200
+    assert not any(m.cls is TrustedHostMiddleware for m in tc.app.user_middleware)
+    assert any("no usable entries" in r.getMessage() for r in caplog.records)
