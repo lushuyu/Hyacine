@@ -4,6 +4,75 @@ All notable changes to Hyacine are listed here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Claude Opus 5.5 becomes the default model, plus a sweep of fixes for
+problems that quietly degraded the daily digest: calendar times shifted by
+the UTC offset, a calendar capped at 10 events, Sent Items and the previous
+digest fed back to the model, no retries on transient Graph errors, starter
+rules that never loaded, and failure alerts that were configured but never
+sent.
+
+### Changed
+
+- **Default model is `claude-opus-5-5`.** One constant,
+  `hyacine.llm.providers.DEFAULT_CLAUDE_MODEL`, now feeds the CLI and
+  Anthropic Console presets, `YamlConfig.llm_model`, the wizard, the probe
+  fallbacks and the desktop mirrors. The desktop Settings model picker lists
+  the active provider's models and always keeps the saved one. Existing
+  installs keep whatever `llm_model` their `config.yaml` pins.
+- **`claude -p` runs isolated.** The CLI provider sets
+  `CLAUDE_CODE_SAFE_MODE=1`, so your `~/.claude` customizations (CLAUDE.md,
+  hooks, plugins, MCP servers) no longer load into the daily run. It pins
+  `CLAUDE_CODE_EFFORT_LEVEL` from `HYACINE_CLAUDE_EFFORT` (default `high`)
+  and runs from an empty temp directory. Set `HYACINE_CLAUDE_SAFE_MODE=0` to
+  opt out.
+- **Leaner LLM payload.** Graph message ids and the duplicated sender domain
+  are no longer sent to the model, and calendar attendee lists are capped at
+  10.
+- **The run unit retries failed runs.** `hyacine-run.service` gains
+  `Restart=on-failure` (15 min apart, at most twice in 4 h) and a start
+  timeout. It needs systemd 244 or newer. Installed copies must be updated by
+  hand.
+
+### Fixed
+
+- **Calendar times.** Events were serialized as UTC while holding local
+  wall-clock times, so they were off by the UTC offset. They now carry the
+  configured zone (`+08:00` for Asia/Singapore). The calendar window is the
+  local day, not the UTC day, and `calendarView` is paginated past Graph's
+  default of 10 events.
+- **Mail outside the inbox.** Sent Items, Drafts, Deleted Items, Junk and
+  Outbox are skipped, and so is Hyacine's own digest.
+- **Transient Graph errors.** Graph calls retry on 429 and 5xx and honour
+  `Retry-After`. `sendMail` retries only when the request provably never
+  reached Graph, so it can't send a duplicate digest. Errors now include
+  Graph's error body.
+- **Opus 5.5 over the Messages API.** First-party requests get room for
+  always-on thinking (`max_tokens` 16000) and an explicit effort level.
+  Current models also get the server-side refusal fallback. Refusals,
+  truncated output and empty replies raise clear errors instead of being
+  mailed as the digest. The OpenAI-compatible backend checks
+  `finish_reason`.
+- **Starter rules.** `config/rules.starter.yaml` used categories missing from
+  `CategoryHint`, so it never loaded and classification was silently off.
+  The categories now exist, and an empty matcher matches nothing instead of
+  everything. Invalid `subject_regex` patterns are rejected when rules are
+  saved instead of crashing the run. A rules file that fails to load now
+  logs a warning.
+- **Failure alerts.** `HYACINE_NTFY_TOPIC` alerts now fire when a systemd or
+  CLI run fails, and a crash prints its traceback to the journal.
+- **"Run now" started two pipelines.** It now uses
+  `systemctl start --no-block` and never falls back to a second
+  unsupervised run on timeout.
+- **Cross-site writes to the web UI.** State-changing requests from other
+  origins get a 403. Setting `HYACINE_WEB_ALLOWED_HOSTS` additionally pins
+  accepted Host names.
+- **Remote images in the digest.** `<img>` is no longer allowed by the
+  sanitizer.
+- Wizard backups such as `.env.bak-*`, which hold the OAuth token, are now
+  gitignored.
+
 ## [1.2.0] — 2026-04-26
 
 Email pipeline cut: the daily digest gets HyacineAI's design language
