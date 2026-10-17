@@ -8,7 +8,7 @@ from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
-from azure.identity import DeviceCodeCredential
+from azure.core.credentials import TokenCredential
 
 from hyacine.graph._http import raise_for_graph_status, request_with_retry
 from hyacine.models import CalendarEvent, CategoryHint, EmailMessage, EventAttendee, Importance
@@ -44,7 +44,7 @@ _IANA_TO_WINDOWS: dict[str, str] = {
 }
 
 
-def _get_bearer(cred: DeviceCodeCredential) -> str:
+def _get_bearer(cred: TokenCredential) -> str:
     token = cred.get_token("https://graph.microsoft.com/.default")
     return f"Bearer {token.token}"
 
@@ -117,7 +117,7 @@ def _resolve_excluded_folder_ids(client: httpx.Client, headers: dict[str, str]) 
 
 
 def fetch_emails(
-    cred: DeviceCodeCredential,
+    cred: TokenCredential,
     since: datetime,
     until: datetime,
     *,
@@ -210,7 +210,7 @@ def fetch_emails(
 
 
 def fetch_calendar(
-    cred: DeviceCodeCredential,
+    cred: TokenCredential,
     day: date,
     *,
     timezone_name: str = "UTC",

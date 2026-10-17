@@ -186,6 +186,25 @@ class TestWatermarkAdvancesOnlyOnSuccess:
         wm_after = run_module.read_watermark()
         assert abs((wm_after - now_utc).total_seconds()) < 2
 
+    def test_unattended_run_never_starts_an_interactive_login(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _patch_settings(monkeypatch, tmp_path)
+        captured: dict[str, object] = {}
+
+        def fake_load(*args: object, **kwargs: object) -> tuple[object, object]:
+            captured.update(kwargs)
+            return object(), object()
+
+        alerts = _patch_phases(monkeypatch, send=lambda *a, **kw: "msg-id-001")
+        monkeypatch.setattr("hyacine.graph.auth.load_or_create_record", fake_load)
+
+        run_module.run_pipeline(now_utc=_NOW)
+
+        assert captured["allow_interactive"] is False
+        assert captured["auth_mode"] == "device_code"
+        assert alerts == []
+
     def test_llm_receives_trimmed_payload(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

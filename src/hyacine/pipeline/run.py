@@ -208,11 +208,19 @@ def run_pipeline(
     # --- Phase 1: Fetch ---
     _p("fetch", "running")
     try:
+        # allow_interactive=False is load-bearing: this runs unattended from a
+        # systemd timer. With interactive auth enabled, a revoked refresh token
+        # sends the run into a device-code/browser flow no one is watching, and
+        # it blocks until that flow times out (~15 min) before failing anyway.
+        # Silent-only turns that into an immediate AuthenticationRequiredError.
         cred, _ = load_or_create_record(
             settings.graph_client_id,
             settings.graph_tenant_id,
             settings.auth_dir,
             settings.scope_list,
+            auth_mode=settings.graph_auth_mode,
+            redirect_port=settings.graph_redirect_port,
+            allow_interactive=False,
         )
         emails = fetch_emails(cred, watermark, now_utc)
         calendar = fetch_calendar(cred, now_local.date(), timezone_name=cfg.timezone)

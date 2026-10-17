@@ -4,22 +4,31 @@ Symptoms first, then the usual causes. For each, what to try in order.
 
 ## Authentication fails
 
-### `AADSTS530032` or `AADSTS7000116` during `bootstrap_auth.py`
+### `AADSTS530032`, `AADSTS7000116` or `AADSTS530036`
 
-Your tenant administrator has disabled device-code flow. Fallback: run the
-auth on your laptop and forward the redirect port back to the server.
+Your tenant blocks device-code flow. `AADSTS530036` on refresh ("the token
+will never be usable and should be deleted") comes from a Conditional Access
+"authentication flows" policy. Switch to the authorization-code flow: set
 
-On the server, swap `DeviceCodeCredential` for `InteractiveBrowserCredential`
-in `src/hyacine/graph/auth.py`, configured to listen on `127.0.0.1:8400`.
-Then from your laptop:
+```bash
+HYACINE_GRAPH_AUTH_MODE=interactive_browser
+HYACINE_GRAPH_REDIRECT_PORT=8400   # optional, default 8400
+```
+
+in `./.env`, then open a tunnel from the machine that has the browser:
 
 ```bash
 ssh -L 8400:localhost:8400 <server>
 ```
 
-Run `bootstrap_auth.py` on the server; the browser opens on your laptop and
-the redirect flows back through the tunnel. This is a documented Azure
-Identity pattern.
+Over that session run `python scripts/bootstrap_auth.py --reset`. It prints
+the sign-in URL; open it locally and the redirect comes back through the
+tunnel. `python scripts/bootstrap_auth.py --check` later verifies the cached
+token without ever prompting.
+
+The scheduled run never starts an interactive login: with a dead refresh
+token it fails at once with `AuthenticationRequiredError` (and alerts)
+instead of waiting on a prompt no one can see. Re-run `bootstrap_auth.py`.
 
 ### `AADSTS50126`
 

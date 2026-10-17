@@ -72,3 +72,73 @@ def test_load_returns_none_when_missing(tmp_path: Path) -> None:
 
     result = load_authentication_record(tmp_path / "nonexistent.json")
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# auth modes + unattended (silent-only) credentials
+# ---------------------------------------------------------------------------
+
+def test_interactive_browser_mode_uses_loopback_redirect(tmp_path: Path) -> None:
+    captured: dict = {}
+
+    def fake_ibc(**kwargs: object) -> MagicMock:
+        captured.update(kwargs)
+        return MagicMock()
+
+    with patch("hyacine.graph.auth.InteractiveBrowserCredential", side_effect=fake_ibc):
+        from hyacine.graph.auth import AUTH_MODE_INTERACTIVE_BROWSER, build_credential
+
+        build_credential(
+            "client-id", "tenant-id", tmp_path,
+            auth_mode=AUTH_MODE_INTERACTIVE_BROWSER, redirect_port=8411,
+        )
+
+    assert captured["redirect_uri"] == "http://localhost:8411"
+    assert captured["cache_persistence_options"].allow_unencrypted_storage is True
+    # prompt_callback is a device-code-only kwarg.
+    assert "prompt_callback" not in captured
+
+
+def test_unknown_auth_mode_is_rejected(tmp_path: Path) -> None:
+    import pytest
+
+    from hyacine.graph.auth import build_credential
+
+    with pytest.raises(ValueError, match="unknown auth_mode"):
+        build_credential("client-id", "tenant-id", tmp_path, auth_mode="magic")
+
+
+def test_silent_only_without_record_raises_instead_of_prompting(tmp_path: Path) -> None:
+    import pytest
+
+    from hyacine.graph.auth import load_or_create_record
+
+    with patch("hyacine.graph.auth.DeviceCodeCredential") as dcc:
+        with pytest.raises(RuntimeError, match="bootstrap_auth.py"):
+            load_or_create_record(
+                "client-id", "tenant-id", tmp_path, ["User.Read"], allow_interactive=False
+            )
+    dcc.assert_not_called()
+
+
+def test_silent_only_with_record_disables_automatic_auth(tmp_path: Path) -> None:
+    captured: dict = {}
+
+    def fake_dcc(**kwargs: object) -> MagicMock:
+        captured.update(kwargs)
+        return MagicMock()
+
+    record = MagicMock()
+    with (
+        patch("hyacine.graph.auth.load_authentication_record", return_value=record),
+        patch("hyacine.graph.auth.DeviceCodeCredential", side_effect=fake_dcc),
+    ):
+        from hyacine.graph.auth import load_or_create_record
+
+        _, returned = load_or_create_record(
+            "client-id", "tenant-id", tmp_path, ["User.Read"], allow_interactive=False
+        )
+
+    assert returned is record
+    assert captured["authentication_record"] is record
+    assert captured["disable_automatic_authentication"] is True
