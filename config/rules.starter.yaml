@@ -10,8 +10,10 @@
 #   sender_email:   case-insensitive SUBSTRING match against the sender address
 #                   ("noreply@" matches any noreply@ sender; even a full address
 #                   such as "bob@example.com" also matches "jbob@example.com")
-#   subject_regex:  Python re.search pattern, case-insensitive; an invalid
-#                   pattern is rejected when the file is loaded
+#   subject_regex:  Python re.search pattern, case-insensitive; it matches
+#                   anywhere in the subject unless anchored with ^ (use
+#                   \b...\b for whole words). An invalid pattern is
+#                   rejected when the file is loaded
 # A rule with multiple matchers requires ALL matchers to match.
 # An empty matcher ("") counts as unset; a rule with no matchers matches nothing.
 #
@@ -37,12 +39,16 @@ rules:
     category: action_required
 
   # --- Meeting invites ---
+  # Not "you're invited" / "join us for": those are webinar and promo phrasing.
+  # "Invitation:" at the start is how Google Calendar invites arrive.
   - name: meeting-invite
-    subject_regex: '(meeting invite|calendar invite|you''re invited|join us for)'
+    subject_regex: '\b(meeting invite|meeting invitation|calendar invite)\b|^\s*invitation\s*:'
     category: meeting
 
+  # Meeting responses and changes ("Accepted: Weekly sync"). Anchored to the
+  # start so "Your card payment was declined" stays out.
   - name: calendar-event
-    subject_regex: '\b(accepted|declined|tentative|updated invitation|cancelled event)\b'
+    subject_regex: '^\s*(accepted|declined|tentative|tentatively accepted|canceled|cancelled|canceled event|cancelled event|updated invitation)\s*:'
     category: calendar
 
   # --- GitHub notifications ---
@@ -60,27 +66,29 @@ rules:
     category: ci
 
   # --- Newsletters & digests ---
+  # Not "weekly update": colleagues use it for real status mail.
   - name: newsletter-subject
-    subject_regex: '(newsletter|weekly digest|monthly digest|weekly update|roundup)'
+    subject_regex: '\b(newsletters?|weekly digest|monthly digest|roundup)\b'
     category: newsletter
 
   - name: newsletter-unsubscribe
     subject_regex: 'unsubscribe'
     category: newsletter
 
-  # --- Marketing ---
-  - name: marketing-noreply
-    sender_email: noreply@
-    category: marketing
-
-  - name: marketing-promo
-    subject_regex: '\b(sale|% off|discount|promo|deal|offer|coupon|limited time)\b'
-    category: marketing
-
   # --- Receipts & billing ---
+  # Before marketing, so a receipt that also advertises a discount stays a receipt.
   - name: receipt-or-invoice
     subject_regex: '\b(receipt|invoice|order confirmation|payment confirmation|billing statement)\b'
     category: receipt
+
+  # --- Marketing ---
+  # No sender-only noreply@ rule: security alerts, banks and universities send
+  # from noreply@ too. To catch noreply promos, pair sender_email with a
+  # promo subject_regex in the same rule.
+  # Not "offer" / "deal": "Offer of Admission", "deal with this".
+  - name: marketing-promo
+    subject_regex: '\b(sale|\d+\s?% off|discounts?|promos?|coupons?|limited[- ]time)\b'
+    category: marketing
 
   # --- Review requests ---
   - name: review-invite

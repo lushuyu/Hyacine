@@ -359,6 +359,115 @@ class TestLoadRules:
 
 
 # ---------------------------------------------------------------------------
+# config/rules.starter.yaml — over-broad rule regressions
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def starter() -> RuleSet:
+    return load_rules(_REPO_ROOT / "config" / "rules.starter.yaml")
+
+
+class TestStarterRules:
+    """The digest folds subscription-like hints into its FYI tail, so a starter
+    rule that is too broad hides real mail there."""
+
+    @pytest.mark.parametrize(
+        ("sender_email", "subject", "expected"),
+        [
+            # A sender-only noreply@ match cannot tell marketing from system mail.
+            ("noreply@accounts.example.com", "Security alert: new sign-in on Windows",
+             CategoryHint.OTHER),
+            ("no-reply@bank.example.com", "Your statement is ready", CategoryHint.OTHER),
+            ("noreply@registrar.example.edu", "Enrolment confirmed for Fall 2026",
+             CategoryHint.OTHER),
+            ("admissions@uni.example.edu", "Offer of Admission - MSc Computer Science",
+             CategoryHint.OTHER),
+            ("bob@example.com", "Can you deal with this today?", CategoryHint.OTHER),
+            ("hr@example.com", "Congratulations on your promotion", CategoryHint.OTHER),
+            ("alerts@bank.example.com", "Your card payment was declined", CategoryHint.OTHER),
+            ("bob@example.com", "Weekly update: infra migration", CategoryHint.OTHER),
+            ("events@vendor.example.com", "Join us for our product webinar",
+             CategoryHint.OTHER),
+            ("events@vendor.example.com", "You're invited: an exclusive preview",
+             CategoryHint.OTHER),
+        ],
+    )
+    def test_not_over_broad(
+        self, starter: RuleSet, sender_email: str, subject: str, expected: CategoryHint
+    ) -> None:
+        email = _email(
+            sender_email=sender_email,
+            sender_domain=sender_email.split("@", 1)[1],
+            subject=subject,
+        )
+        assert starter.classify(email) == expected
+
+    @pytest.mark.parametrize(
+        "subject",
+        [
+            "Accepted: Weekly sync",
+            "Declined: Weekly sync",
+            "Tentative: Weekly sync",
+            "Canceled: Weekly sync",
+            "Cancelled: Weekly sync",
+            "Updated invitation: Weekly sync @ Mon 10am",
+            "Canceled event: Weekly sync @ Mon 10am",
+        ],
+    )
+    def test_meeting_responses_are_calendar(self, starter: RuleSet, subject: str) -> None:
+        assert starter.classify(_email(subject=subject)) == CategoryHint.CALENDAR
+
+    @pytest.mark.parametrize(
+        "subject", ["Invitation: Design sync @ Tue 3pm", "Meeting invitation: Q3 planning"]
+    )
+    def test_meeting_invites_are_meeting(self, starter: RuleSet, subject: str) -> None:
+        assert starter.classify(_email(subject=subject)) == CategoryHint.MEETING
+
+    @pytest.mark.parametrize(
+        "subject",
+        [
+            "Flash sale: 50% off everything",
+            "Up to 30 % off this weekend",
+            "Your promo code is inside",
+            "Members-only discount",
+            "Limited-time coupon for you",
+        ],
+    )
+    def test_promos_are_marketing(self, starter: RuleSet, subject: str) -> None:
+        email = _email(sender_email="hello@shop.example.com", sender_domain="shop.example.com",
+                       subject=subject)
+        assert starter.classify(email) == CategoryHint.MARKETING
+
+    def test_github_pr_notification_is_github(self, starter: RuleSet) -> None:
+        email = _email(
+            sender_email="notifications@github.com",
+            sender_domain="github.com",
+            subject="Re: [acme/widgets] Fix flaky test (PR #42)",
+        )
+        assert starter.classify(email) == CategoryHint.GITHUB
+
+    @pytest.mark.parametrize(
+        "subject",
+        ["Your receipt from Acme Inc #1234-5678", "Your receipt from Acme - 20% off next time"],
+    )
+    def test_receipt_is_receipt(self, starter: RuleSet, subject: str) -> None:
+        email = _email(sender_email="receipts@stripe.com", sender_domain="stripe.com",
+                       subject=subject)
+        assert starter.classify(email) == CategoryHint.RECEIPT
+
+    def test_newsletter_is_newsletter(self, starter: RuleSet) -> None:
+        assert starter.classify(_email(subject="The weekly newsletter")) == (
+            CategoryHint.NEWSLETTER
+        )
+
+    def test_no_sender_only_noreply_rule(self, starter: RuleSet) -> None:
+        for rule in starter.rules:
+            sender = (rule.sender_email or "").lower()
+            if "noreply" in sender or "no-reply" in sender:
+                assert rule.subject_regex, rule.name
+
+
+# ---------------------------------------------------------------------------
 # validate_rules_yaml
 # ---------------------------------------------------------------------------
 
