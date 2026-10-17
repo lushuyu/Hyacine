@@ -275,3 +275,47 @@ def test_systemd_units_have_required_directives() -> None:
             assert directive in content, (
                 f"{tmr.name} missing directive: {directive!r}"
             )
+
+
+def _unit_directives(path: pathlib.Path) -> dict[str, dict[str, str]]:
+    """Parse a unit file into {section: {key: value}}, skipping comments."""
+    sections: dict[str, dict[str, str]] = {}
+    current: dict[str, str] = {}
+    for raw in path.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            current = sections.setdefault(line[1:-1], {})
+            continue
+        key, _, value = line.partition("=")
+        current[key] = value
+    return sections
+
+
+def test_run_service_retries_failed_runs() -> None:
+    """Failed runs are retried a bounded number of times; a hung run times out."""
+    units = _unit_directives(_SYSTEMD_DIR / "hyacine-run.service")
+    service, unit = units["Service"], units["Unit"]
+
+    assert service["Type"] == "oneshot"
+    assert service["Restart"] == "on-failure"
+    assert service["RestartSec"] == "15min"
+    assert service["TimeoutStartSec"] == "40min"
+    # Start-rate limits belong in [Unit] (systemd >= 230).
+    assert unit["StartLimitIntervalSec"] == "4h"
+    assert unit["StartLimitBurst"] == "3"
+
+
+def test_run_service_has_no_network_online_dependency() -> None:
+    """network-online.target does not exist in a systemd user manager."""
+    unit = _unit_directives(_SYSTEMD_DIR / "hyacine-run.service")["Unit"]
+    assert "After" not in unit
+    assert "Wants" not in unit
+
+
+def test_run_timer_comments_make_no_false_claims() -> None:
+    """Nothing regenerates the timer and there is no HYACINE_RUN_TIME override."""
+    content = (_SYSTEMD_DIR / "hyacine-run.timer").read_text()
+    assert "HYACINE_RUN_TIME" not in content
+    assert "regenerate" not in content

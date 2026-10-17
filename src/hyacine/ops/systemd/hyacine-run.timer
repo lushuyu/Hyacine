@@ -1,18 +1,18 @@
-# systemd user timer — fires hyacine-run.service daily at the configured run_time.
+# systemd user timer — fires hyacine-run.service once a day.
 # Install: ~/.config/systemd/user/hyacine-run.timer
 # Enable:  systemctl --user enable --now hyacine-run.timer
 #
-# NOTE: The OnCalendar timezone suffix requires systemd 242+. Set your system
-# timezone via `timedatectl set-timezone <iana-tz>` so the timer fires at the
-# correct local time. Alternatively override with HYACINE_RUN_TIME env var.
+# NOTE: Nothing generates this file. OnCalendar is edited by hand to match
+# run_time in ./config/config.yaml (then `systemctl --user daemon-reload`).
 
 [Unit]
 Description=Daily trigger for hyacine-run.service
 
 [Timer]
-# Fires at 07:30 local system time. Adjust to match your timezone and run_time
-# setting in ./config/config.yaml. Re-run `python -m hyacine init` after
-# changing run_time to regenerate this file with the correct value.
+# Fires at 07:30 in the host's timezone (`timedatectl`). OnCalendar can carry
+# an IANA zone suffix (systemd >= 242) to follow config.yaml's timezone
+# regardless of the host's, e.g.
+#   OnCalendar=*-*-* 07:30:00 Asia/Singapore
 OnCalendar=*-*-* 07:30:00
 # If the host was off at 07:30, fire on next start. Critical for laptops/WSL.
 Persistent=true

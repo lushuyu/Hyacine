@@ -14,6 +14,7 @@ Contract:
 from __future__ import annotations
 
 import os
+import sys
 import traceback
 import zoneinfo
 from collections.abc import Callable
@@ -237,8 +238,11 @@ def run_pipeline(
     ruleset: RuleSet | None = None
     try:
         ruleset = load_rules(settings.rules_path)
-    except Exception:
-        pass
+    except Exception as exc:
+        # Non-fatal: classify without rules, but say why (one line; YAML and
+        # validation errors are multi-line, so collapse the whitespace).
+        reason = " ".join(f"{exc.__class__.__name__}: {exc}".split())
+        print(f"WARN: rules not loaded, classifying without them: {reason}", file=sys.stderr)
 
     for email in emails:
         if ruleset is not None:
@@ -401,6 +405,23 @@ def _ensure_utc(dt: datetime) -> datetime:
     return dt
 
 
+def _alert_failure(summary: str) -> None:
+    """Best-effort ntfy alert for a failed run. Never raises.
+
+    ntfy topics are readable by anyone who knows the name, so only a short
+    one-line summary goes out; the full traceback stays in the run row and
+    journald. No-op when HYACINE_NTFY_TOPIC is unset (send_ntfy skips an
+    empty topic).
+    """
+    try:
+        from hyacine.ops.monitoring import send_ntfy
+
+        message = " ".join(summary.split())[:200]  # one line, short
+        send_ntfy(_get_settings().ntfy_topic, message, title="hyacine run failed")
+    except Exception:  # noqa: BLE001
+        pass  # the alert path must never turn a failed run into a crash
+
+
 def main() -> int:
     """CLI entry: `python -m hyacine.pipeline.run` or `python -m hyacine run`."""
     try:
@@ -413,9 +434,15 @@ def main() -> int:
             first_line = record.error_traceback.strip().splitlines()[-1]
             err_class = first_line
         print(f"FAIL: {err_class}")
+        _alert_failure(f"run {record.id} failed: {err_class}")
         return 1
     except Exception as exc:
-        print(f"FAIL: {exc.__class__.__name__}")
+        # Full traceback to stderr (journald under systemd); stdout and the
+        # alert get the one-line summary.
+        traceback.print_exc()
+        summary = f"{exc.__class__.__name__}: {exc}"
+        print(f"FAIL: {summary}")
+        _alert_failure(f"run failed: {summary}")
         return 1
 
 

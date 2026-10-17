@@ -359,3 +359,102 @@ class TestPipelineForwardsEmailContext:
         assert captured["weekday"] == "Friday"
         assert captured["language"] == "en"
         assert captured["model"] == "gpt-4.1"
+
+
+class TestRulesLoadFailureIsNonFatal:
+    """A broken or missing rules file must not fail the run, but it must no
+    longer be silent: one warning line on stderr naming the error.
+    """
+
+    def _patch_happy_path(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            "hyacine.graph.auth.load_or_create_record",
+            lambda *a, **kw: (object(), object()),
+        )
+        monkeypatch.setattr(
+            "hyacine.graph.fetch.fetch_emails",
+            lambda *a, **kw: [_make_email()],
+        )
+        monkeypatch.setattr(
+            "hyacine.graph.fetch.fetch_calendar",
+            lambda *a, **kw: [],
+        )
+        monkeypatch.setattr(
+            "hyacine.pipeline.run.summarize",
+            lambda *a, **kw: "# Daily report\nContent here.",
+        )
+        monkeypatch.setattr(
+            "hyacine.graph.send.send_email",
+            lambda *a, **kw: "msg-id-rules",
+        )
+
+    def test_invalid_rules_warn_and_run_succeeds(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        _patch_settings(monkeypatch, tmp_path)
+        self._patch_happy_path(monkeypatch)
+        monkeypatch.setattr(
+            "hyacine.pipeline.rules.load_rules",
+            lambda *a, **kw: (_ for _ in ()).throw(
+                ValueError("Invalid rules YAML at rules.yaml: 1 validation error\n  rules")
+            ),
+        )
+
+        record = run_module.run_pipeline(now_utc=datetime(2024, 6, 15, 2, 0, tzinfo=UTC))
+
+        assert record.status == RunStatus.SUCCESS
+        assert record.sent_message_id == "msg-id-rules"
+        err = capsys.readouterr().err
+        assert err.count("\n") == 1  # exactly one line
+        assert err.startswith("WARN: rules not loaded")
+        assert "ValueError: Invalid rules YAML at rules.yaml: 1 validation error rules" in err
+
+    def test_missing_rules_file_warns_with_path(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        # _patch_settings points rules_path at a file that does not exist, so
+        # the real load_rules raises FileNotFoundError.
+        _patch_settings(monkeypatch, tmp_path)
+        self._patch_happy_path(monkeypatch)
+
+        record = run_module.run_pipeline(now_utc=datetime(2024, 6, 15, 2, 0, tzinfo=UTC))
+
+        assert record.status == RunStatus.SUCCESS
+        err = capsys.readouterr().err
+        assert "FileNotFoundError" in err
+        assert str(tmp_path / "rules.yaml") in err
+
+
+class TestMainAlertsOnFailedRun:
+    """End-to-end: a real FAILED run row reaches main()'s ntfy alert with the
+    run id and the traceback's last line.
+    """
+
+    def test_fetch_failure_sends_short_ntfy_alert(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        _patch_settings(monkeypatch, tmp_path)
+        monkeypatch.setattr(
+            "hyacine.graph.auth.load_or_create_record",
+            lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("auth error")),
+        )
+        sent: list[tuple[str, str]] = []
+        monkeypatch.setattr(
+            "hyacine.ops.monitoring.send_ntfy",
+            lambda topic, message, **kw: sent.append((topic, message)) or True,
+        )
+
+        assert run_module.main() == 1
+
+        assert capsys.readouterr().out.strip() == "FAIL: RuntimeError: auth error"
+        # Topic is "" in _patch_settings; send_ntfy owns the empty-topic no-op.
+        assert sent == [("", "run 1 failed: RuntimeError: auth error")]
