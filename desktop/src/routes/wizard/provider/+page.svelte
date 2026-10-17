@@ -57,15 +57,6 @@
   // wizard (or never typing a new key) keeps the old one.
   let replacingKey = $state(false);
   const showStoredKey = $derived(existingForSlug && !replacingKey);
-  // What config.yaml points at right now (providers.current).
-  let savedProvider = $state<{
-    id: string;
-    api_format: ApiFormat;
-    base_url: string;
-    default_model: string;
-    secret_slug: string;
-  } | null>(null);
-
   const selectedPreset = $derived(presets.find((p) => p.id === selectedId));
   const effectiveFormat = $derived<ApiFormat>(
     selectedId === 'custom' ? customFormat : (selectedPreset?.api_format ?? 'anthropic_cli')
@@ -121,22 +112,11 @@
     !pickedModel || modelOptions.includes(pickedModel)
   );
 
-  // The webview never sees a stored key, so the only way to test one is
-  // rust_probe_claude: it tests the *saved* provider with the key read from
-  // that provider's own keychain slot. It only tests what this form shows
-  // while the form still matches the saved provider. Otherwise the key is
-  // tested on the connectivity step, once Continue has saved the choice.
-  const formMatchesSaved = $derived(
-    !!savedProvider &&
-      savedProvider.id === selectedId &&
-      savedProvider.secret_slug === slug &&
-      savedProvider.default_model === effectiveModel &&
-      (selectedId !== 'custom' ||
-        (savedProvider.api_format === customFormat && savedProvider.base_url === customBaseUrl))
-  );
+  // The webview never sees a stored key. rust_provider_test reads the key
+  // from the keychain slot of the provider this form shows (never the
+  // sidecar's key, which belongs to the active provider) and tests it.
   // Local providers have no key field and run without auth.
   const usingStoredKey = $derived(existingForSlug && !key && !isLocalProvider);
-  const storedKeyUntestable = $derived(usingStoredKey && !formMatchesSaved);
 
   onMount(async () => {
     try {
@@ -152,7 +132,6 @@
     }
     try {
       const cur = await ipc.providers.current();
-      savedProvider = cur.current;
       if (cur.current?.id) selectedId = cur.current.id;
       // Custom endpoints have no preset-level format/base_url, so we have
       // to hydrate those from providers.current() explicitly — otherwise
@@ -222,11 +201,8 @@
   }
 
   async function runTest() {
-    // A stored key is tested through rust_probe_claude (see
-    // formMatchesSaved), never by calling providers.test without a key:
-    // the sidecar would then fall back to whatever key it was spawned
-    // with, which can belong to a different provider.
-    if (storedKeyUntestable) return;
+    // A stored key is tested through rust_provider_test (see
+    // usingStoredKey), never by calling providers.test without a key.
     if (!usingStoredKey && requiresKey && !validity.ok) {
       pushToast('error', `Invalid key: ${validity.reason}`);
       return;
@@ -243,7 +219,12 @@
     testDetail = '';
     try {
       const res: ProbeResult = usingStoredKey
-        ? await ipc.cmd<ProbeResult>('rust_probe_claude')
+        ? await ipc.cmd<ProbeResult>('rust_provider_test', {
+            providerId: selectedId === 'custom' ? '' : selectedId,
+            baseUrl: requiresBaseUrl ? customBaseUrl : undefined,
+            apiFormat: selectedId === 'custom' ? customFormat : undefined,
+            model: effectiveModel || undefined
+          })
         : await ipc.providers.test({
             provider_id: selectedId === 'custom' ? '' : selectedId,
             base_url: requiresBaseUrl ? customBaseUrl : undefined,
@@ -724,7 +705,6 @@
         disabled={testing ||
           (requiresKey && !existingForSlug && !validity.ok) ||
           keyEnteredButInvalid ||
-          storedKeyUntestable ||
           (requiresBaseUrl && !customBaseUrl)}
         onclick={runTest}
       >
@@ -746,9 +726,6 @@
         </span>
       {/if}
     </div>
-    {#if storedKeyUntestable}
-      <p class="text-xs text-[rgb(var(--fg-muted))]">{$t('providerStoredKeyTestLater')}</p>
-    {/if}
     {#if testOk === false && testDetail}
       <div class="whitespace-pre-wrap rounded-lg border border-red-500/20 bg-red-500/5 p-3 font-mono text-xs text-[rgb(var(--fg-muted))]">
         {testDetail}
