@@ -258,7 +258,7 @@ def run_pipeline(
         calendar_today=calendar,
         generated_at=now_utc,
     )
-    json_input = fetch_result.model_dump_json()
+    json_input = fetch_result.to_llm_json()
 
     # Append a language instruction so the output obeys the user's config
     # even when their system prompt doesn't mention a language explicitly.

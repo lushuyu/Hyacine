@@ -178,6 +178,43 @@ class TestWatermarkAdvancesOnlyOnSuccess:
         wm_after = run_module.read_watermark()
         assert abs((wm_after - now_utc).total_seconds()) < 2
 
+    def test_llm_receives_trimmed_payload(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _patch_settings(monkeypatch, tmp_path)
+        captured: dict[str, str] = {}
+
+        def fake_summarize(json_input: str, *a: object, **kw: object) -> str:
+            captured["json"] = json_input
+            return "# Daily report"
+
+        monkeypatch.setattr(
+            "hyacine.graph.auth.load_or_create_record",
+            lambda *a, **kw: (object(), object()),
+        )
+        monkeypatch.setattr(
+            "hyacine.graph.fetch.fetch_emails",
+            lambda *a, **kw: [_make_email()],
+        )
+        monkeypatch.setattr(
+            "hyacine.graph.fetch.fetch_calendar",
+            lambda *a, **kw: [],
+        )
+        monkeypatch.setattr("hyacine.pipeline.run.summarize", fake_summarize)
+        monkeypatch.setattr(
+            "hyacine.graph.send.send_email",
+            lambda *a, **kw: "msg-id-001",
+        )
+
+        run_module.run_pipeline(now_utc=datetime(2024, 6, 15, 2, 0, 0, tzinfo=UTC))
+
+        import json
+
+        email = json.loads(captured["json"])["emails"][0]
+        assert email["subject"] == "Test"
+        assert "id" not in email
+        assert "sender_domain" not in email
+
     def test_watermark_not_advanced_when_llm_fails(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
