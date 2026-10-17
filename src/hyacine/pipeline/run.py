@@ -361,24 +361,34 @@ def run_pipeline(
     except Exception as exc:
         send_error = exc
         tb = traceback.format_exc()
-        uncertain = _delivery_uncertain(exc)
+        # A SIGTERM that lands mid-POST leaves the outcome as open as a read
+        # timeout does.
+        uncertain = _delivery_uncertain(exc) or isinstance(exc, RunTerminated)
         if uncertain:
             # Shown under the traceback on the dashboard's run page.
             tb += f"{_DELIVERY_UNKNOWN_NOTE}\n"
-        _update_row(
-            status=RunStatus.FAILED,
-            finished_at=datetime.now(UTC),
-            email_count=len(emails),
-            markdown=markdown,
-            error_traceback=tb,
-        )
+        try:
+            _update_row(
+                status=RunStatus.FAILED,
+                finished_at=datetime.now(UTC),
+                email_count=len(emails),
+                markdown=markdown,
+                error_traceback=tb,
+            )
+            failed_record = _load_record()
+        except Exception as record_exc:
+            if not uncertain:
+                raise
+            # Same rule as the success path: a bookkeeping error must not turn
+            # "may have been sent" into a retryable failure.
+            raise DeliveredButNotRecorded(None, outcome_unknown=True) from record_exc
         _p("deliver", "fail")
         try:
             from hyacine.ops.monitoring import ping_healthchecks
             ping_healthchecks(settings.healthchecks_uuid, "fail", tb)
         except Exception:
             pass
-        return _load_record().model_copy(update={"delivery_uncertain": uncertain})
+        return failed_record.model_copy(update={"delivery_uncertain": uncertain})
 
     # --- Success path ---
     # The digest is in the inbox from here on. If recording that fails, raise
@@ -487,17 +497,31 @@ EXIT_NO_RETRY = 3
 
 
 class DeliveredButNotRecorded(Exception):
-    """sendMail succeeded, then advancing the watermark or the SUCCESS row failed.
+    """sendMail succeeded (or may have), then recording the run failed.
 
-    Raised from the original error. main() exits EXIT_NO_RETRY: a retry
-    would mail the same digest again.
+    Raised from the original error, either after a successful send (advancing
+    the watermark or writing the SUCCESS row failed) or after a send whose
+    outcome is unknown (writing the FAILED row failed; ``outcome_unknown``).
+    main() exits EXIT_NO_RETRY: a retry could mail the same digest again.
     """
 
-    def __init__(self, sent_message_id: str | None, *, watermark_advanced: bool = False) -> None:
+    def __init__(
+        self,
+        sent_message_id: str | None,
+        *,
+        watermark_advanced: bool = False,
+        outcome_unknown: bool = False,
+    ) -> None:
         self.sent_message_id = sent_message_id
         self.watermark_advanced = watermark_advanced
+        self.outcome_unknown = outcome_unknown
+        what = (
+            "sendMail outcome unknown"
+            if outcome_unknown
+            else f"digest sent (sent_message_id={sent_message_id})"
+        )
         super().__init__(
-            f"digest sent (sent_message_id={sent_message_id}) but the run was not recorded; "
+            f"{what} but the run was not recorded; "
             f"watermark {'advanced' if watermark_advanced else 'not advanced'}"
         )
 
@@ -554,9 +578,15 @@ def main() -> int:
         reason = f"{original.__class__.__name__}: {original}" if original else "unknown error"
         print(f"FAIL: {exc}: {reason}")
         state = "advanced" if exc.watermark_advanced else "not advanced"
-        _alert_failure(
-            f"digest sent but the run was not recorded; watermark {state} ({reason})"
-        )
+        if exc.outcome_unknown:
+            _alert_failure(
+                "sendMail outcome unknown and the run was not recorded, not retrying - "
+                f"check the inbox ({reason})"
+            )
+        else:
+            _alert_failure(
+                f"digest sent but the run was not recorded; watermark {state} ({reason})"
+            )
         return EXIT_NO_RETRY
     except Exception as exc:
         # Full traceback to stderr (journald under systemd); stdout and the

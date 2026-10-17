@@ -627,6 +627,60 @@ class TestUncertainSendIsNotRetried:
         assert run_module.main() == 1
         assert "outcome unknown" not in alerts[0]
 
+    def test_sigterm_during_send_counts_as_uncertain(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        db_path = _patch_settings(monkeypatch, tmp_path)
+        terminated = run_module.RunTerminated("terminated by SIGTERM")
+        alerts = _patch_phases(monkeypatch, send=_raiser(terminated))
+
+        assert run_module.main() == run_module.EXIT_NO_RETRY
+
+        status, tb, _ = _stored_run(db_path)
+        assert status == RunStatus.FAILED
+        assert tb is not None
+        assert tb.endswith("delivery outcome unknown: not retrying\n")
+        assert "check the inbox" in alerts[0]
+
+    def test_failed_row_write_error_after_uncertain_send_is_not_retried(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        _patch_settings(monkeypatch, tmp_path)
+
+        def send_then_break_db(*args: Any, **kwargs: Any) -> str:
+            monkeypatch.setattr(
+                run_module, "session_scope", _raiser(sqlite3.OperationalError("database is locked"))
+            )
+            raise httpx.ReadTimeout("timed out")
+
+        alerts = _patch_phases(monkeypatch, send=send_then_break_db)
+
+        assert run_module.main() == run_module.EXIT_NO_RETRY
+
+        assert "OperationalError: database is locked" in capsys.readouterr().err
+        assert alerts == [
+            "sendMail outcome unknown and the run was not recorded, not retrying - "
+            "check the inbox (OperationalError: database is locked)"
+        ]
+
+    def test_failed_row_write_error_after_refused_send_stays_retryable(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _patch_settings(monkeypatch, tmp_path)
+
+        def send_then_break_db(*args: Any, **kwargs: Any) -> str:
+            monkeypatch.setattr(
+                run_module, "session_scope", _raiser(sqlite3.OperationalError("database is locked"))
+            )
+            raise httpx.ConnectError("refused")
+
+        _patch_phases(monkeypatch, send=send_then_break_db)
+
+        assert run_module.main() == 1
+
 
 class TestDeliveredButNotRecorded:
     """Once sendMail succeeded, a failure to record the run must not look like
