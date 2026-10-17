@@ -9,11 +9,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import ModuleType
 
 import httpx
 import pytest
 
-from hyacine.llm import LlmError, summarize
+from hyacine.llm import LlmError, anthropic_http, openai_chat, summarize
 from hyacine.llm.providers import Provider, by_id, default_provider
 
 
@@ -217,3 +218,279 @@ def test_openai_chat_allows_empty_key_for_local(prompt_file: Path, monkeypatch: 
     )
     assert out == "local ok"
     assert captured["auth"] is None
+
+
+# ---------------------------------------------------------------------------
+# anthropic_http: first-party vs relay request body, stop_reason handling
+# ---------------------------------------------------------------------------
+
+FIRST_PARTY = "https://api.anthropic.com"
+RELAY = "https://api.deepseek.com/anthropic"
+
+
+def _mock_post(
+    monkeypatch: pytest.MonkeyPatch, module: ModuleType, payload: dict[str, object]
+) -> dict[str, object]:
+    """Route ``module.httpx.post`` to a MockTransport returning ``payload``.
+
+    Returns a dict that fills with the outgoing request's headers and body.
+    """
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["headers"] = request.headers
+        captured["body"] = json.loads(request.content.decode("utf-8"))
+        return httpx.Response(200, json=payload)
+
+    transport = httpx.MockTransport(handler)
+
+    def fake_post(url: str, **kw: object) -> httpx.Response:
+        with httpx.Client(transport=transport) as c:
+            return c.post(url, **kw)
+
+    monkeypatch.setattr(module.httpx, "post", fake_post)
+    return captured
+
+
+def _ok(text: str = "digest") -> dict[str, object]:
+    return {"content": [{"type": "text", "text": text}], "stop_reason": "end_turn"}
+
+
+def _call_anthropic(prompt_file: Path, *, base_url: str, model: str) -> str:
+    return anthropic_http.summarize(
+        "{}", prompt_file, base_url=base_url, api_key="k", model=model
+    )
+
+
+@pytest.fixture()
+def _no_effort_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("HYACINE_CLAUDE_EFFORT", raising=False)
+
+
+@pytest.mark.usefixtures("_no_effort_env")
+@pytest.mark.parametrize(
+    "model", ["claude-opus-5-5", "claude-opus-5", "claude-fable-5-1", "claude-sonnet-5-5"]
+)
+def test_anthropic_http_first_party_current_model_body(
+    prompt_file: Path, monkeypatch: pytest.MonkeyPatch, model: str
+) -> None:
+    captured = _mock_post(monkeypatch, anthropic_http, _ok())
+    assert _call_anthropic(prompt_file, base_url=FIRST_PARTY, model=model) == "digest"
+
+    body = captured["body"]
+    assert isinstance(body, dict)
+    assert body["max_tokens"] == 16000
+    assert body["output_config"] == {"effort": "high"}
+    assert body["fallbacks"] == "default"
+    # Sampling knobs are rejected on these models; thinking is always on.
+    for key in ("temperature", "top_p", "top_k", "thinking"):
+        assert key not in body
+    headers = captured["headers"]
+    assert isinstance(headers, httpx.Headers)
+    assert headers["anthropic-beta"] == "server-side-fallback-2026-07-01"
+    assert headers["x-api-key"] == "k"
+    assert headers["anthropic-version"] == "2023-06-01"
+
+
+@pytest.mark.usefixtures("_no_effort_env")
+@pytest.mark.parametrize("model", ["claude-haiku-4-5", "claude-sonnet-4-5"])
+def test_anthropic_http_first_party_older_model_skips_effort(
+    prompt_file: Path, monkeypatch: pytest.MonkeyPatch, model: str
+) -> None:
+    captured = _mock_post(monkeypatch, anthropic_http, _ok())
+    _call_anthropic(prompt_file, base_url=FIRST_PARTY + "/", model=model)
+
+    body = captured["body"]
+    assert isinstance(body, dict)
+    assert body["max_tokens"] == 16000
+    assert "output_config" not in body
+    assert "fallbacks" not in body
+    headers = captured["headers"]
+    assert isinstance(headers, httpx.Headers)
+    assert "anthropic-beta" not in headers
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [RELAY, "https://api.moonshot.cn/anthropic", "https://api.anthropic.com.evil.example"],
+)
+def test_anthropic_http_relay_gets_core_contract_only(
+    prompt_file: Path, monkeypatch: pytest.MonkeyPatch, base_url: str
+) -> None:
+    """Relays forward claude-* ids too, but reject the first-party extras."""
+    monkeypatch.setenv("HYACINE_CLAUDE_EFFORT", "max")
+    captured = _mock_post(monkeypatch, anthropic_http, _ok())
+    _call_anthropic(prompt_file, base_url=base_url, model="claude-opus-5-5")
+
+    body = captured["body"]
+    assert isinstance(body, dict)
+    assert body["max_tokens"] == 4096
+    assert "output_config" not in body
+    assert "fallbacks" not in body
+    headers = captured["headers"]
+    assert isinstance(headers, httpx.Headers)
+    assert "anthropic-beta" not in headers
+
+
+def test_anthropic_http_effort_env_override(
+    prompt_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HYACINE_CLAUDE_EFFORT", " XHigh ")
+    captured = _mock_post(monkeypatch, anthropic_http, _ok())
+    _call_anthropic(prompt_file, base_url=FIRST_PARTY, model="claude-opus-5-5")
+    body = captured["body"]
+    assert isinstance(body, dict)
+    assert body["output_config"] == {"effort": "xhigh"}
+
+
+def test_anthropic_http_effort_env_invalid(
+    prompt_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HYACINE_CLAUDE_EFFORT", "ultra")
+    captured = _mock_post(monkeypatch, anthropic_http, _ok())
+    with pytest.raises(anthropic_http.AnthropicHttpError, match="HYACINE_CLAUDE_EFFORT"):
+        _call_anthropic(prompt_file, base_url=FIRST_PARTY, model="claude-opus-5-5")
+    assert captured == {}, "no request should be sent with a bad effort value"
+
+
+@pytest.mark.usefixtures("_no_effort_env")
+def test_anthropic_http_skips_thinking_and_fallback_blocks(
+    prompt_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _mock_post(
+        monkeypatch,
+        anthropic_http,
+        {
+            "content": [
+                {"type": "thinking", "thinking": "", "signature": "sig"},
+                {
+                    "type": "fallback",
+                    "from": {"model": "claude-opus-5-5"},
+                    "to": {"model": "claude-opus-5"},
+                },
+                {"type": "text", "text": "  part one, "},
+                {"type": "text", "text": "part two  "},
+            ],
+            "stop_reason": "end_turn",
+            "stop_details": None,
+        },
+    )
+    out = _call_anthropic(prompt_file, base_url=FIRST_PARTY, model="claude-opus-5-5")
+    assert out == "part one, part two"
+
+
+@pytest.mark.usefixtures("_no_effort_env")
+def test_anthropic_http_refusal_raises_with_details(
+    prompt_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _mock_post(
+        monkeypatch,
+        anthropic_http,
+        {
+            "content": [],
+            "stop_reason": "refusal",
+            "stop_details": {
+                "type": "refusal",
+                "category": "cyber",
+                "explanation": "declined by safety classifier",
+            },
+        },
+    )
+    with pytest.raises(anthropic_http.AnthropicHttpError) as exc:
+        _call_anthropic(prompt_file, base_url=FIRST_PARTY, model="claude-opus-5-5")
+    assert "refused" in str(exc.value)
+    assert "cyber" in str(exc.value)
+    assert "declined by safety classifier" in str(exc.value)
+
+
+def test_anthropic_http_refusal_without_details_still_raises(
+    prompt_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """stop_details may be null; partial text on a refusal is never returned."""
+    _mock_post(
+        monkeypatch,
+        anthropic_http,
+        {
+            "content": [{"type": "text", "text": "partial"}],
+            "stop_reason": "refusal",
+            "stop_details": None,
+        },
+    )
+    with pytest.raises(anthropic_http.AnthropicHttpError, match="refused"):
+        _call_anthropic(prompt_file, base_url=RELAY, model="m")
+
+
+@pytest.mark.parametrize("stop", ["max_tokens", "model_context_window_exceeded"])
+def test_anthropic_http_truncation_raises(
+    prompt_file: Path, monkeypatch: pytest.MonkeyPatch, stop: str
+) -> None:
+    _mock_post(
+        monkeypatch,
+        anthropic_http,
+        {"content": [{"type": "text", "text": "half a digest"}], "stop_reason": stop},
+    )
+    with pytest.raises(anthropic_http.AnthropicHttpError, match="truncated"):
+        _call_anthropic(prompt_file, base_url=RELAY, model="m")
+
+
+def test_anthropic_http_string_content_returned(
+    prompt_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _mock_post(monkeypatch, anthropic_http, {"content": "  relay text  "})
+    assert _call_anthropic(prompt_file, base_url=RELAY, model="m") == "relay text"
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "",
+        "   \n",
+        [],
+        [{"type": "thinking", "thinking": "", "signature": "sig"}],
+        [{"type": "text", "text": "  "}],
+    ],
+)
+def test_anthropic_http_empty_content_raises(
+    prompt_file: Path, monkeypatch: pytest.MonkeyPatch, content: object
+) -> None:
+    _mock_post(monkeypatch, anthropic_http, {"content": content, "stop_reason": "end_turn"})
+    with pytest.raises(anthropic_http.AnthropicHttpError, match="text content"):
+        _call_anthropic(prompt_file, base_url=RELAY, model="m")
+
+
+# ---------------------------------------------------------------------------
+# openai_chat: finish_reason handling
+# ---------------------------------------------------------------------------
+
+
+def _call_openai(prompt_file: Path) -> str:
+    return openai_chat.summarize(
+        "{}", prompt_file, base_url="https://api.openai.com/v1", api_key="k", model="m"
+    )
+
+
+def test_openai_chat_finish_reason_stop_ok(
+    prompt_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _mock_post(
+        monkeypatch,
+        openai_chat,
+        {"choices": [{"message": {"content": "all good"}, "finish_reason": "stop"}]},
+    )
+    assert _call_openai(prompt_file) == "all good"
+
+
+@pytest.mark.parametrize(
+    ("finish", "match"),
+    [("length", "truncated"), ("content_filter", "content filter")],
+)
+def test_openai_chat_bad_finish_reason_raises(
+    prompt_file: Path, monkeypatch: pytest.MonkeyPatch, finish: str, match: str
+) -> None:
+    _mock_post(
+        monkeypatch,
+        openai_chat,
+        {"choices": [{"message": {"content": "half a dig"}, "finish_reason": finish}]},
+    )
+    with pytest.raises(openai_chat.OpenAiChatError, match=match):
+        _call_openai(prompt_file)

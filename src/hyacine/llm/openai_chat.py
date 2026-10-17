@@ -88,6 +88,19 @@ def summarize(
     if not isinstance(first, dict):
         raise OpenAiChatError("malformed choice entry")
 
+    # A cut-off or filtered completion still carries partial text; sending it
+    # as the digest would look complete to the reader, so fail instead.
+    finish = first.get("finish_reason")
+    if finish == "length":
+        raise OpenAiChatError(
+            "output truncated (finish_reason=length); the digest would be incomplete"
+        )
+    if finish == "content_filter":
+        raise OpenAiChatError(
+            "response blocked by the provider's content filter "
+            "(finish_reason=content_filter)"
+        )
+
     msg = first.get("message") or {}
     text = msg.get("content")
     if isinstance(text, str) and text.strip():
