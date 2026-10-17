@@ -31,9 +31,18 @@ sent.
   are no longer sent to the model, and calendar attendee lists are capped at
   10.
 - **The run unit retries failed runs.** `hyacine-run.service` gains
-  `Restart=on-failure` (15 min apart, at most twice in 4 h) and a start
-  timeout. It needs systemd 244 or newer. Installed copies must be updated by
-  hand.
+  `Restart=on-failure` (15 min apart; 3 starts of any kind per 4 h) and a
+  40-minute start timeout. It needs systemd 244 or newer. Installed copies
+  must be updated by hand.
+- **Exit status 3 means "don't retry".** A run exits 3 when `sendMail` failed
+  in a way that doesn't rule out delivery (a read timeout, or HTTP 500, 502 or
+  504), or when the digest went out but the run couldn't be recorded. The unit
+  sets `RestartPreventExitStatus=3`, so a retry never mails a second digest.
+  A run stopped by SIGTERM (e.g. the start timeout) now marks itself failed
+  and alerts instead of staying "running".
+- **Configurable output budget for HTTP providers.** `HYACINE_LLM_MAX_TOKENS`
+  overrides the defaults: 16000 for the Anthropic Console (64000 at effort
+  `xhigh` or `max`), 4096 for relays and OpenAI-compatible endpoints.
 
 ### Fixed
 
@@ -57,17 +66,31 @@ sent.
 - **Starter rules.** `config/rules.starter.yaml` used categories missing from
   `CategoryHint`, so it never loaded and classification was silently off.
   The categories now exist, and an empty matcher matches nothing instead of
-  everything. Invalid `subject_regex` patterns are rejected when rules are
+  everything. Rules that were too broad to switch on are narrowed: a
+  `noreply@` sender no longer means marketing, "offer"/"deal" no longer mean
+  promo, and calendar responses must start with `Accepted:`, `Declined:` and
+  the like. Invalid `subject_regex` patterns are rejected when rules are
   saved instead of crashing the run. A rules file that fails to load now
   logs a warning.
+
+  **Upgrade note:** an existing `config/rules.yaml` copied from the old
+  starter starts loading with this release, including the over-broad rules.
+  If yours is an unmodified copy, replace it with the new
+  `config/rules.starter.yaml`; otherwise apply the same edits by hand.
 - **Failure alerts.** `HYACINE_NTFY_TOPIC` alerts now fire when a systemd or
-  CLI run fails, and a crash prints its traceback to the journal.
+  CLI run fails, carrying the full exception message, and a crash prints its
+  traceback to the journal.
 - **"Run now" started two pipelines.** It now uses
   `systemctl start --no-block` and never falls back to a second
-  unsupervised run on timeout.
+  unsupervised run on timeout. It also resets the unit's start limit first,
+  so a deliberate manual run is never silently refused.
 - **Cross-site writes to the web UI.** State-changing requests from other
   origins get a 403. Setting `HYACINE_WEB_ALLOWED_HOSTS` additionally pins
-  accepted Host names.
+  accepted Host names; entries may include a port or be pasted as URLs.
+- **`claude -p` robustness.** A relative `HYACINE_CLAUDE_BIN` keeps working
+  from the temp working directory, a missing binary raises a clear error, and
+  an empty result fails the run instead of mailing an empty digest. The
+  wizard's provider test uses the same isolated environment as the real run.
 - **Remote images in the digest.** `<img>` is no longer allowed by the
   sanitizer.
 - Wizard backups such as `.env.bak-*`, which hold the OAuth token, are now
