@@ -40,6 +40,16 @@ def test_run_record_defaults() -> None:
     assert rec.status is RunStatus.PENDING
     assert rec.hc_ping_result is HcPingResult.SKIPPED
     assert rec.email_count == 0
+    assert rec.delivery_uncertain is False
+
+
+def test_run_record_delivery_uncertain_is_not_a_db_column() -> None:
+    """The flag only travels from run_pipeline to main(); the runs table
+    (and therefore the dashboard) never stores it."""
+    from hyacine.db import Run
+
+    assert "delivery_uncertain" in RunRecord.model_fields
+    assert "delivery_uncertain" not in Run.__table__.columns
 
 
 def test_calendar_event_shape() -> None:

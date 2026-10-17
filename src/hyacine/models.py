@@ -155,6 +155,9 @@ class RunRecord(BaseModel):
     error_traceback: str | None = None
     hc_ping_result: HcPingResult = HcPingResult.SKIPPED
     sent_message_id: str | None = None
+    # Not persisted: set on a FAILED run whose sendMail raised although Graph
+    # may already have accepted it, so a retry could mail a second digest.
+    delivery_uncertain: bool = False
 
 
 class ConfigSnapshot(BaseModel):
