@@ -2,7 +2,7 @@
   import { goto } from '$app/navigation';
   import { onMount } from 'svelte';
   import { ipc, type ApiFormat, type ProbeResult, type ProviderPreset } from '$lib/ipc';
-  import { FALLBACK_PRESETS, formatError } from '$lib/provider-presets';
+  import { DEFAULT_CLAUDE_MODEL, FALLBACK_PRESETS, formatError } from '$lib/provider-presets';
   import { pushToast, sidecarError, wizard } from '$lib/stores';
   import { t } from '$lib/i18n';
   import { isClaudeKey, maskKey } from '$lib/validators';
@@ -61,7 +61,7 @@
    *  picked per protocol so the first save never lands `sonnet` on an
    *  OpenAI-compatible endpoint (the previous bug) or vice versa. */
   const customDefaultModel = $derived(
-    customFormat === 'anthropic_http' ? 'claude-sonnet-4-5' : 'gpt-4o-mini'
+    customFormat === 'anthropic_http' ? DEFAULT_CLAUDE_MODEL : 'gpt-4o-mini'
   );
   const effectiveModel = $derived(
     pickedModel ||
@@ -242,7 +242,7 @@
         fields.llm_api_format = customFormat;
         fields.llm_base_url = customBaseUrl;
         // Always persist a concrete model. Without this the yaml loader
-        // falls back to YamlConfig.llm_model = 'sonnet', which breaks
+        // falls back to YamlConfig.llm_model (a Claude id), which breaks
         // OpenAI-protocol custom endpoints on the first call.
         fields.llm_model = effectiveModel;
       } else if (selectedPreset) {

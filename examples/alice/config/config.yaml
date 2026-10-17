@@ -2,7 +2,7 @@
 recipient_email: alice@example.com
 timezone: America/Los_Angeles
 language: en
-llm_model: sonnet
+llm_model: claude-opus-5-5
 run_time: "07:30"
 llm_timeout_seconds: 300
 fetch_max_emails: 500

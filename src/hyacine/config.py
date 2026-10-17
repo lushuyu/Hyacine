@@ -118,7 +118,7 @@ class YamlConfig(BaseSettings):
 
     recipient_email: str = ""               # must be set by wizard
     timezone: str = "UTC"                   # IANA tz, e.g. "America/New_York"
-    llm_model: str = "sonnet"
+    llm_model: str = "claude-opus-5-5"      # mirrors llm.providers.DEFAULT_CLAUDE_MODEL
     run_time: str = "07:30"
     llm_timeout_seconds: int = 300
     fetch_max_emails: int = 500

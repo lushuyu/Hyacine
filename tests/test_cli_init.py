@@ -17,6 +17,8 @@ from hyacine.cli.init import (
     _validate_tz,
     run_init,
 )
+from hyacine.config import YamlConfig
+from hyacine.llm.providers import DEFAULT_CLAUDE_MODEL
 
 
 def _answer_sequence(answers: list[str]):
@@ -101,7 +103,44 @@ def test_build_config_yaml_keys() -> None:
     assert data["recipient_email"] == "alice@example.com"
     assert data["timezone"] == "UTC"
     assert data["language"] == "en"
-    assert "llm_model" in data
+    assert data["llm_model"] == DEFAULT_CLAUDE_MODEL
+
+
+def _config_answers() -> dict[str, object]:
+    return {
+        "email_recipient": "alice@example.com",
+        "timezone": "UTC",
+        "run_time": "07:30",
+        "language": "en",
+    }
+
+
+def test_build_config_yaml_non_wizard_fields_follow_yamlconfig() -> None:
+    """Fields the wizard doesn't ask about must track YamlConfig's defaults
+    (they used to be hard-coded here and drifted: llm_model stayed "sonnet")."""
+    import yaml
+
+    data = yaml.safe_load(_build_config_yaml(_config_answers()))
+    defaults = YamlConfig.model_construct()
+    for name in (
+        "llm_model",
+        "llm_timeout_seconds",
+        "fetch_max_emails",
+        "initial_watermark_lookback_hours",
+    ):
+        assert data[name] == getattr(defaults, name), name
+
+
+def test_build_config_yaml_ignores_env_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+    """YamlConfig is a BaseSettings, so a bare YamlConfig() would read these
+    from the shell and bake them into the generated config.yaml."""
+    import yaml
+
+    monkeypatch.setenv("LLM_MODEL", "leaked-model")
+    monkeypatch.setenv("FETCH_MAX_EMAILS", "7")
+    data = yaml.safe_load(_build_config_yaml(_config_answers()))
+    assert data["llm_model"] == DEFAULT_CLAUDE_MODEL
+    assert data["fetch_max_emails"] == YamlConfig.model_fields["fetch_max_emails"].default
 
 
 # ---------------------------------------------------------------------------
@@ -317,6 +356,11 @@ def test_fresh_run_writes_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     assert (repo_root / "prompts" / "hyacine.md").exists()
     env_file = repo_root / ".env"
     assert env_file.exists()
+
+    import yaml
+
+    written = yaml.safe_load((repo_root / "config" / "config.yaml").read_text(encoding="utf-8"))
+    assert written["llm_model"] == DEFAULT_CLAUDE_MODEL
 
     mode = stat.S_IMODE(env_file.stat().st_mode)
     assert oct(mode)[-3:] == "600", f"Expected 600, got {oct(mode)[-3:]}"

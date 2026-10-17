@@ -12,8 +12,9 @@ timezone: UTC
 # Output language for the report email: "en" (English) or "zh-CN" (Simplified Chinese)
 language: en
 
-# LLM model passed to `claude -p --model`. "sonnet" = claude-sonnet-4-6.
-llm_model: sonnet
+# Model id passed to the active LLM provider. The `claude` CLI also accepts
+# short aliases like opus / sonnet / haiku; HTTP providers need a full id.
+llm_model: claude-opus-5-5
 
 # Time of day to send the report (HH:MM in the configured timezone).
 # The systemd timer uses this value — re-run `python -m hyacine init` after changing.

@@ -26,7 +26,7 @@ from typing import Any
 import httpx
 
 from hyacine.llm import providers as _providers
-from hyacine.llm.providers import Provider
+from hyacine.llm.providers import DEFAULT_CLAUDE_MODEL, Provider
 
 
 def list_providers() -> dict[str, Any]:
@@ -178,7 +178,7 @@ def _probe_anthropic_cli(*, api_key: str, model: str) -> dict[str, Any]:
         bin_path,
         "-p",
         "--output-format", "text",
-        "--model", model or "sonnet",
+        "--model", model or DEFAULT_CLAUDE_MODEL,
         "--max-turns", "1",
         "--tools", "",
         "--permission-mode", "default",
@@ -188,6 +188,10 @@ def _probe_anthropic_cli(*, api_key: str, model: str) -> dict[str, Any]:
     try:
         completed = subprocess.run(
             argv,
+            # The sidecar's stdin is the JSON-RPC channel. Inheriting it
+            # makes `claude -p` wait on stdin (~3 s) and lets it swallow
+            # RPC frames meant for us.
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             env=env,
             timeout=30,
@@ -222,7 +226,7 @@ def _probe_anthropic_http(base_url: str, api_key: str, model: str) -> dict[str, 
     start = _now_ms()
     url = base_url.rstrip("/") + "/v1/messages"
     body = {
-        "model": model or "claude-haiku-4-5",
+        "model": model or DEFAULT_CLAUDE_MODEL,
         "max_tokens": 1,
         "messages": [{"role": "user", "content": "ping"}],
     }

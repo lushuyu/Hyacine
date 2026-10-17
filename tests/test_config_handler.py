@@ -20,6 +20,7 @@ import pytest
 from hyacine.config import YamlConfig
 from hyacine.ipc.handlers import config_h
 from hyacine.ipc.protocol import INVALID_PARAMS, RpcError
+from hyacine.llm.providers import DEFAULT_CLAUDE_MODEL
 
 
 @pytest.fixture
@@ -64,6 +65,16 @@ def test_write_config_accepts_provider_fields(tmp_repo: Path) -> None:
     assert got["llm_base_url"] == "https://api.openai.com/v1"
     assert got["llm_api_format"] == "openai_chat"
     assert got["llm_model"] == "gpt-4o-mini"
+
+
+def test_read_config_without_file_reports_default_model(
+    tmp_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Settings pane shows this before any config.yaml exists."""
+    monkeypatch.delenv("LLM_MODEL", raising=False)  # YamlConfig reads env too
+    got = config_h.read_config()
+    assert got["exists"] is False
+    assert got["llm_model"] == DEFAULT_CLAUDE_MODEL
 
 
 def test_write_config_still_rejects_unknown_key(tmp_repo: Path) -> None:

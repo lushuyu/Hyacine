@@ -94,12 +94,20 @@ BUILTIN_PRESETS: tuple[Provider, ...] = (
         category="official",
         api_format="anthropic_cli",
         base_url="",                   # CLI handles this
-        default_model="sonnet",
+        default_model=DEFAULT_CLAUDE_MODEL,
         secret_slug="claude-code-oauth",
         docs_url="https://docs.anthropic.com/en/docs/claude-code",
         icon_color="#8b5cf6",
         notes="Uses the `claude` CLI under the hood (same as a normal Claude Code session).",
-        models=("sonnet", "opus", "haiku"),
+        # The CLI takes full ids and its own short aliases alike.
+        models=(
+            DEFAULT_CLAUDE_MODEL,
+            "claude-sonnet-5-5",
+            "claude-haiku-5-5",
+            "opus",
+            "sonnet",
+            "haiku",
+        ),
     ),
     Provider(
         id="anthropic-console",
@@ -107,14 +115,15 @@ BUILTIN_PRESETS: tuple[Provider, ...] = (
         category="official",
         api_format="anthropic_http",
         base_url="https://api.anthropic.com",
-        default_model="claude-sonnet-4-5",
+        default_model=DEFAULT_CLAUDE_MODEL,
         secret_slug="anthropic-console",
         docs_url="https://console.anthropic.com/settings/keys",
         icon_color="#8b5cf6",
+        # Messages API wants full ids — no CLI aliases here.
         models=(
-            "claude-sonnet-4-5",
-            "claude-haiku-4-5",
-            "claude-opus-4-5",
+            DEFAULT_CLAUDE_MODEL,
+            "claude-sonnet-5-5",
+            "claude-haiku-5-5",
         ),
     ),
     Provider(
