@@ -11,6 +11,7 @@ are monkeypatched.
 """
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -222,6 +223,69 @@ def test_cli_probe_unexecutable_binary_fails(monkeypatch: pytest.MonkeyPatch) ->
     assert "could not execute `claude` at '/usr/bin/claude'" in res["detail"]
 
 
+def test_cli_probe_without_flag_uses_the_sidecar_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        "hyacine.llm.claude_code.resolve_claude_bin", lambda _env: "/usr/bin/claude"
+    )
+    monkeypatch.setattr(providers_h.subprocess, "run", _fake_cli_run(calls))
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sidecar-tok")
+
+    res = providers_h.test(provider_id="claude-code-oauth")
+
+    assert res["status"] == "ok"
+    assert calls[0]["env"]["CLAUDE_CODE_OAUTH_TOKEN"] == "sidecar-tok"
+
+
+def test_cli_login_probe_runs_without_any_oauth_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replacing a stored token with `claude login`: the test must not pass on
+    the token that Continue is about to delete (still in the sidecar env)."""
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        "hyacine.llm.claude_code.resolve_claude_bin", lambda _env: "/usr/bin/claude"
+    )
+    monkeypatch.setattr(providers_h.subprocess, "run", _fake_cli_run(calls))
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sidecar-tok")
+    monkeypatch.setenv("HYACINE_CLAUDE_CODE_OAUTH_TOKEN", "alias-tok")
+
+    res = providers_h.test(
+        provider_id="claude-code-oauth", api_key="typed-tok", use_cli_login=True
+    )
+
+    assert res["status"] == "ok"
+    env = calls[0]["env"]
+    assert "CLAUDE_CODE_OAUTH_TOKEN" not in env
+    assert "HYACINE_CLAUDE_CODE_OAUTH_TOKEN" not in env
+    # Same build_env rules as any other CLI probe.
+    assert env["CLAUDE_CODE_SAFE_MODE"] == "1"
+    # Only the child's env changes, not the sidecar's.
+    assert os.environ["CLAUDE_CODE_OAUTH_TOKEN"] == "sidecar-tok"
+    assert os.environ["HYACINE_CLAUDE_CODE_OAUTH_TOKEN"] == "alias-tok"
+
+
+def test_cli_login_flag_does_not_affect_key_providers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def _post(url: str, **kwargs: Any) -> httpx.Response:
+        captured["headers"] = kwargs["headers"]
+        return httpx.Response(200, json={})
+
+    monkeypatch.setattr(providers_h.httpx, "post", _post)
+
+    res = providers_h.test(
+        provider_id="anthropic-console", api_key="sk-ant-api-x", use_cli_login=True
+    )
+
+    assert res["status"] == "ok"
+    assert captured["headers"]["x-api-key"] == "sk-ant-api-x"
+
+
 def test_http_probe_defaults_model(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, Any] = {}
 
@@ -292,7 +356,7 @@ def test_active_key_is_not_sent_to_another_vendor(
 
     assert res["status"] == "fail"
     assert "requires an api_key" in res["detail"]
-    assert "active provider" in res["detail"]
+    assert "no key is stored for this provider" in res["detail"]
     assert calls == []
 
 

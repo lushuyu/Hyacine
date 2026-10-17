@@ -91,6 +91,7 @@ def test(  # noqa: C901 — mirrors providers.api_format branches; keeping a sin
     api_format: str = "",
     api_key: str = "",
     model: str = "",
+    use_cli_login: bool = False,
     emit: Callable[[str, Any], None] | None = None,
     **_: Any,
 ) -> dict[str, Any]:
@@ -101,6 +102,10 @@ def test(  # noqa: C901 — mirrors providers.api_format branches; keeping a sin
     endpoint. Returns the familiar connectivity-probe shape
     ``{kind, status, latency_ms, detail}`` so the wizard UI can reuse
     existing card components.
+
+    ``use_cli_login`` only affects ``anthropic_cli``: the probe then runs
+    without any OAuth token, so it checks the ``claude login`` credentials
+    alone (see :func:`_probe_anthropic_cli`).
     """
     preset: Provider | None = _providers.by_id(provider_id) if provider_id else None
     effective_format = api_format or (preset.api_format if preset else "")
@@ -127,7 +132,9 @@ def test(  # noqa: C901 — mirrors providers.api_format branches; keeping a sin
     )
 
     if effective_format == "anthropic_cli":
-        return _probe_anthropic_cli(api_key=effective_key, model=effective_model)
+        return _probe_anthropic_cli(
+            api_key=effective_key, model=effective_model, use_cli_login=use_cli_login
+        )
     if effective_format == "anthropic_http":
         if not effective_base:
             return _fail("providers.test", "missing base_url for anthropic_http")
@@ -146,9 +153,7 @@ def test(  # noqa: C901 — mirrors providers.api_format branches; keeping a sin
     return _fail("providers.test", f"unknown api_format: {effective_format!r}")
 
 
-_NO_KEY_HINT = (
-    "; enter the key to test it (a stored key is only used for the active provider)"
-)
+_NO_KEY_HINT = "; no key is stored for this provider, enter it on the provider step to test it"
 
 
 def _env_key_for(api_format: str, base_url: str) -> str:
@@ -188,7 +193,9 @@ def _env_key_for(api_format: str, base_url: str) -> str:
 # ── Individual probes ──────────────────────────────────────────────────────
 
 
-def _probe_anthropic_cli(*, api_key: str, model: str) -> dict[str, Any]:
+def _probe_anthropic_cli(
+    *, api_key: str, model: str, use_cli_login: bool = False
+) -> dict[str, Any]:
     """Invoke ``claude -p "ping"`` using an optional OAuth token or existing CLI credentials.
 
     The ``api_key`` parameter is optional. When non-empty we export it as
@@ -201,6 +208,13 @@ def _probe_anthropic_cli(*, api_key: str, model: str) -> dict[str, Any]:
 
     Genuine blockers (the ``claude`` binary itself being absent) still fail
     loud; that's what the :func:`resolve_claude_bin` branch below catches.
+
+    ``use_cli_login`` tests the ``claude login`` credentials only: ``api_key``
+    is ignored and ``CLAUDE_CODE_OAUTH_TOKEN`` / its
+    ``HYACINE_CLAUDE_CODE_OAUTH_TOKEN`` alias are dropped from the env. The
+    sidecar env keeps a token until it respawns, so without this a user who
+    is replacing a stored token with ``claude login`` would be testing the
+    token that is about to be deleted.
 
     The env comes from :func:`build_env` and the child runs from an empty
     temp dir, as in the daily run, so the probe gets the same API-key
@@ -215,7 +229,10 @@ def _probe_anthropic_cli(*, api_key: str, model: str) -> dict[str, Any]:
 
     start = _now_ms()
     base_env = os.environ.copy()
-    if api_key.strip():
+    if use_cli_login:
+        base_env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
+        base_env.pop("HYACINE_CLAUDE_CODE_OAUTH_TOKEN", None)
+    elif api_key.strip():
         base_env["CLAUDE_CODE_OAUTH_TOKEN"] = api_key.strip()
     try:
         env = build_env(base_env)
