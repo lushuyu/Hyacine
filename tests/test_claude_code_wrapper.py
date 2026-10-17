@@ -1,6 +1,7 @@
 """Tests for hyacine.llm.claude_code subprocess wrapper."""
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -246,6 +247,34 @@ class TestResolveClaudeBin:
         with pytest.raises(ClaudeCodeError, match="not found"):
             resolve_claude_bin(env)
 
+    def test_relative_override_made_absolute(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # summarize() runs claude from a temp dir, so a relative path would
+        # point at nothing there.
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        bin_path = self._make_fake_claude(bin_dir)
+        monkeypatch.chdir(tmp_path)
+        env = {"HYACINE_CLAUDE_BIN": os.path.join("bin", "claude"), "PATH": "/nope"}
+        found = resolve_claude_bin(env)
+        assert os.path.isabs(found)
+        assert Path(found).resolve() == bin_path.resolve()
+
+    def test_relative_path_entry_made_absolute(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        empty_home = tmp_path / "home"
+        empty_home.mkdir()
+        monkeypatch.setenv("HOME", str(empty_home))
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        bin_path = self._make_fake_claude(bin_dir)
+        monkeypatch.chdir(tmp_path)
+        found = resolve_claude_bin({"PATH": "bin"})
+        assert os.path.isabs(found)
+        assert Path(found).resolve() == bin_path.resolve()
+
 
 # ---------------------------------------------------------------------------
 # summarize
@@ -326,6 +355,75 @@ class TestSummarize:
 
         monkeypatch.setattr(subprocess, "run", _fail)
         with pytest.raises(ClaudeCodeError, match="HYACINE_CLAUDE_EFFORT"):
+            summarize("{}", prompt_file)
+
+    def test_relative_claude_bin_runs_from_temp_cwd(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Real subprocess: a relative HYACINE_CLAUDE_BIN must still be found
+        once the child's cwd is the temp dir."""
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        stub = bin_dir / "claude"
+        stub.write_text(
+            "#!/bin/sh\n"
+            "cat >/dev/null\n"
+            'printf \'%s\\n\' \'{"result": "stub digest", "is_error": false}\'\n'
+        )
+        stub.chmod(0o755)
+        (tmp_path / "prompt.md").write_text("system prompt")
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("HYACINE_CLAUDE_BIN", os.path.join("bin", "claude"))
+
+        assert summarize("{}", Path("prompt.md")) == "stub digest"
+
+    @pytest.mark.parametrize(
+        "exc",
+        [
+            FileNotFoundError(2, "No such file or directory"),
+            PermissionError(13, "Permission denied"),
+        ],
+    )
+    def test_wraps_oserror_from_spawn(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, exc: OSError
+    ) -> None:
+        """The binary can vanish or lose its exec bit after it was resolved."""
+        prompt_file = tmp_path / "prompt.md"
+        prompt_file.write_text("system prompt")
+        bin_path = os.environ["HYACINE_CLAUDE_BIN"]
+
+        def _raise(*a, **kw):  # type: ignore[no-untyped-def]
+            raise exc
+
+        monkeypatch.setattr(subprocess, "run", _raise)
+        with pytest.raises(ClaudeCodeError, match="could not execute claude") as info:
+            summarize("{}", prompt_file)
+        assert bin_path in str(info.value)
+        assert info.value.__cause__ is exc
+
+    @pytest.mark.parametrize(
+        "stdout",
+        [
+            b'{"result": "", "is_error": false}\n',
+            b'{"result": "  \\n\\t ", "is_error": false}\n',
+            b'{"result": null, "is_error": false}\n',
+            b'[{"type":"system"},{"type":"result","is_error":false,"result":""}]\n',
+        ],
+    )
+    def test_raises_on_empty_result(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stdout: bytes
+    ) -> None:
+        """An empty digest must fail the run, not be mailed."""
+        prompt_file = tmp_path / "prompt.md"
+        prompt_file.write_text("system prompt")
+
+        fake_completed = MagicMock(spec=subprocess.CompletedProcess)
+        fake_completed.stdout = stdout
+        fake_completed.stderr = b""
+        fake_completed.returncode = 0
+
+        monkeypatch.setattr(subprocess, "run", lambda *a, **kw: fake_completed)
+        with pytest.raises(ClaudeCodeError, match="claude returned an empty result"):
             summarize("{}", prompt_file)
 
     def test_parses_result_field_from_list(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

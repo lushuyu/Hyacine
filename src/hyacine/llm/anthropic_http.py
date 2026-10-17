@@ -13,7 +13,10 @@ First-party vs relay: relays only implement the core of the contract
 (DeepSeek, for one, rejects ``max_tokens`` above 8192), so the larger output
 budget, ``output_config.effort`` and the server-side refusal fallback are
 only sent when the host is ``api.anthropic.com`` — and the last two only for
-current-generation models that accept them.
+the models that accept them.
+
+``HYACINE_LLM_MAX_TOKENS`` (a positive integer) replaces the output budget
+for every host when the defaults below don't fit.
 """
 from __future__ import annotations
 
@@ -28,18 +31,38 @@ _FIRST_PARTY_HOST = "api.anthropic.com"
 
 # Thinking is always on for current Claude models and its tokens count
 # toward max_tokens, so first-party gets room for thinking plus a long zh-CN
-# digest while staying small enough for a non-streaming request. Relays keep
-# the conservative cap they have always accepted.
+# digest while staying small enough for a non-streaming request. At xhigh /
+# max effort Anthropic needs max_tokens >= 64000 or the output truncates
+# mid-thought; those requests also run longer, so llm_timeout_seconds may
+# need raising with them. Relays keep the conservative cap they have always
+# accepted.
 _FIRST_PARTY_MAX_TOKENS = 16000
+_HIGH_EFFORT_MAX_TOKENS = 64000
+_HIGH_EFFORT_LEVELS = ("xhigh", "max")
 _RELAY_MAX_TOKENS = 4096
 
-# Model id prefixes that accept output_config.effort and `fallbacks:
-# "default"`. Older models (claude-haiku-4-5, …) reject effort with a 400.
-_EFFORT_MODEL_PREFIXES = ("claude-opus-5", "claude-fable-5-1", "claude-sonnet-5-5")
+# Model id prefixes that accept output_config.effort (all five levels).
+# Older models (claude-haiku-4-5, claude-sonnet-4-5, …) reject it with a 400;
+# claude-opus-4-6 / claude-sonnet-4-6 lack xhigh, so they are left out too.
+_EFFORT_MODEL_PREFIXES = (
+    "claude-opus-5",
+    "claude-fable-5",
+    "claude-sonnet-5",
+    "claude-haiku-5-5",
+    "claude-opus-4-7",
+    "claude-opus-4-8",
+)
+# Model id prefixes that accept the server-side refusal fallback
+# (`fallbacks: "default"`); a subset of the effort models above.
+_FALLBACK_MODEL_PREFIXES = ("claude-opus-5", "claude-fable-5-1", "claude-sonnet-5-5")
 _EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
 # Opus 5.5 defaults to "medium"; the digest is worth the extra thinking.
 _DEFAULT_EFFORT = "high"
 _FALLBACK_BETA = "server-side-fallback-2026-07-01"
+_TRUNCATION_HINT = (
+    "; raise HYACINE_LLM_MAX_TOKENS (and llm_timeout_seconds) "
+    "or lower HYACINE_CLAUDE_EFFORT"
+)
 
 
 class AnthropicHttpError(RuntimeError):
@@ -57,6 +80,22 @@ def _resolve_effort() -> str:
             f"{', '.join(_EFFORT_LEVELS)}"
         )
     return raw
+
+
+def _max_tokens_override() -> int | None:
+    """Return ``HYACINE_LLM_MAX_TOKENS`` (validated), or None when unset."""
+    raw = os.environ.get("HYACINE_LLM_MAX_TOKENS", "").strip()
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 0
+    if value <= 0:
+        raise AnthropicHttpError(
+            f"HYACINE_LLM_MAX_TOKENS={raw!r} is not a positive integer"
+        )
+    return value
 
 
 def summarize(
@@ -83,6 +122,19 @@ def summarize(
     system_prompt = system_prompt_path.read_text(encoding="utf-8")
 
     first_party = urlparse(base_url).hostname == _FIRST_PARTY_HOST
+    effort = (
+        _resolve_effort()
+        if first_party and model.startswith(_EFFORT_MODEL_PREFIXES)
+        else None
+    )
+    max_tokens = _max_tokens_override()
+    if max_tokens is None:
+        if not first_party:
+            max_tokens = _RELAY_MAX_TOKENS
+        elif effort in _HIGH_EFFORT_LEVELS:
+            max_tokens = _HIGH_EFFORT_MAX_TOKENS
+        else:
+            max_tokens = _FIRST_PARTY_MAX_TOKENS
 
     url = base_url.rstrip("/") + "/v1/messages"
     headers = {
@@ -92,7 +144,7 @@ def summarize(
     }
     body: dict[str, object] = {
         "model": model,
-        "max_tokens": _FIRST_PARTY_MAX_TOKENS if first_party else _RELAY_MAX_TOKENS,
+        "max_tokens": max_tokens,
         "system": system_prompt,
         "messages": [
             {
@@ -105,8 +157,9 @@ def summarize(
             },
         ],
     }
-    if first_party and model.startswith(_EFFORT_MODEL_PREFIXES):
-        body["output_config"] = {"effort": _resolve_effort()}
+    if effort is not None:
+        body["output_config"] = {"effort": effort}
+    if first_party and model.startswith(_FALLBACK_MODEL_PREFIXES):
         # On a classifier refusal the API re-runs the request on Anthropic's
         # recommended fallback model inside the same call.
         headers["anthropic-beta"] = _FALLBACK_BETA
@@ -138,7 +191,13 @@ def summarize(
             f"(category={details.get('category')!r}): "
             f"{details.get('explanation') or 'no explanation given'}"
         )
-    if stop in ("max_tokens", "model_context_window_exceeded"):
+    if stop == "max_tokens":
+        raise AnthropicHttpError(
+            f"output truncated (stop_reason={stop}); the digest would be "
+            f"incomplete{_TRUNCATION_HINT}"
+        )
+    if stop == "model_context_window_exceeded":
+        # A bigger output budget can't help: the input filled the window.
         raise AnthropicHttpError(
             f"output truncated (stop_reason={stop}); the digest would be incomplete"
         )

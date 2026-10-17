@@ -75,7 +75,9 @@ def resolve_claude_bin(env: dict[str, str] | None = None) -> str:
 
     Order: explicit `HYACINE_CLAUDE_BIN` env var, then `shutil.which` against an
     augmented PATH that includes `~/.local/bin` (npm/uv default install dir
-    that systemd user units omit by default).
+    that systemd user units omit by default). Relative results (a relative
+    override or PATH entry) are anchored to the current cwd, since summarize()
+    runs the binary from a temp dir where they would no longer resolve.
     """
     src = env if env is not None else os.environ
     override = src.get("HYACINE_CLAUDE_BIN")
@@ -84,7 +86,7 @@ def resolve_claude_bin(env: dict[str, str] | None = None) -> str:
             raise ClaudeCodeError(
                 f"HYACINE_CLAUDE_BIN={override!r} is not an executable file."
             )
-        return override
+        return os.path.abspath(override)
 
     extra = os.path.expanduser("~/.local/bin")
     path = src.get("PATH", os.defpath)
@@ -96,7 +98,7 @@ def resolve_claude_bin(env: dict[str, str] | None = None) -> str:
             "claude CLI not found on PATH. Install Claude Code or set "
             f"HYACINE_CLAUDE_BIN. Searched PATH={path!r}."
         )
-    return found
+    return os.path.abspath(found)
 
 
 def build_argv(
@@ -142,8 +144,9 @@ def summarize(
 ) -> str:
     """Run `claude -p` with json_input piped to stdin; return the `result` string.
 
-    Raises ClaudeCodeError on any failure path (timeout, non-JSON output,
-    missing result field, explicit error in JSON).
+    Raises ClaudeCodeError on any failure path (timeout, binary that can't be
+    executed, non-JSON output, missing or empty result field, explicit error
+    in JSON).
     """
     argv = build_argv(
         system_prompt_path,
@@ -172,6 +175,11 @@ def summarize(
         except subprocess.TimeoutExpired as exc:
             raise ClaudeCodeError(
                 f"claude subprocess timed out after {timeout_seconds}s"
+            ) from exc
+        except OSError as exc:
+            # Resolved a moment ago, so it vanished or lost its exec bit.
+            raise ClaudeCodeError(
+                f"could not execute claude at {argv[0]!r}: {exc}"
             ) from exc
 
     stdout_text = completed.stdout.decode(errors="replace").strip()
@@ -219,7 +227,12 @@ def summarize(
             f"claude result event missing 'result' field. keys={list(result_event.keys())}"
         )
 
-    return str(result_event["result"])
+    raw_result = result_event["result"]
+    result = "" if raw_result is None else str(raw_result)
+    # An empty digest would still be mailed; fail the run instead.
+    if not result.strip():
+        raise ClaudeCodeError("claude returned an empty result")
+    return result
 
 
 __all__ = [

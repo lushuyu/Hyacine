@@ -10,17 +10,40 @@ don't ship an Azure preset in Phase 1 so we skip the special case.
 Hostnames running an unauthenticated local model (Ollama, LM Studio)
 can pass an empty string as the key — the header is omitted in that
 case.
+
+``HYACINE_LLM_MAX_TOKENS`` (a positive integer) replaces the default
+output budget.
 """
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import httpx
 
+# Modest cap — Hyacine summaries fit comfortably here.
+_DEFAULT_MAX_TOKENS = 4096
+
 
 class OpenAiChatError(RuntimeError):
     """Raised when an openai_chat call can't be completed or is refused."""
+
+
+def _max_tokens() -> int:
+    """Return ``HYACINE_LLM_MAX_TOKENS`` (validated) or the default."""
+    raw = os.environ.get("HYACINE_LLM_MAX_TOKENS", "").strip()
+    if not raw:
+        return _DEFAULT_MAX_TOKENS
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 0
+    if value <= 0:
+        raise OpenAiChatError(
+            f"HYACINE_LLM_MAX_TOKENS={raw!r} is not a positive integer"
+        )
+    return value
 
 
 def summarize(
@@ -63,8 +86,7 @@ def summarize(
                 ),
             },
         ],
-        # Modest cap — Hyacine summaries fit comfortably here.
-        "max_tokens": 4096,
+        "max_tokens": _max_tokens(),
     }
 
     try:
@@ -93,7 +115,8 @@ def summarize(
     finish = first.get("finish_reason")
     if finish == "length":
         raise OpenAiChatError(
-            "output truncated (finish_reason=length); the digest would be incomplete"
+            "output truncated (finish_reason=length); the digest would be "
+            "incomplete; raise HYACINE_LLM_MAX_TOKENS"
         )
     if finish == "content_filter":
         raise OpenAiChatError(

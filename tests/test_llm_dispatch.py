@@ -25,6 +25,12 @@ def prompt_file(tmp_path: Path) -> Path:
     return p
 
 
+@pytest.fixture(autouse=True)
+def _no_max_tokens_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Keep an operator's own override out of the max_tokens assertions.
+    monkeypatch.delenv("HYACINE_LLM_MAX_TOKENS", raising=False)
+
+
 def test_providers_module_contract() -> None:
     """Every built-in preset must have a non-empty name, id, and a known api_format."""
     from hyacine.llm.providers import BUILTIN_PRESETS
@@ -293,7 +299,38 @@ def test_anthropic_http_first_party_current_model_body(
 
 
 @pytest.mark.usefixtures("_no_effort_env")
-@pytest.mark.parametrize("model", ["claude-haiku-4-5", "claude-sonnet-4-5"])
+@pytest.mark.parametrize(
+    "model",
+    [
+        "claude-haiku-5-5",
+        "claude-opus-4-7",
+        "claude-opus-4-8",
+        "claude-fable-5",
+        "claude-sonnet-5",
+    ],
+)
+def test_anthropic_http_first_party_effort_without_fallback(
+    prompt_file: Path, monkeypatch: pytest.MonkeyPatch, model: str
+) -> None:
+    """These accept effort but not the server-side refusal fallback."""
+    captured = _mock_post(monkeypatch, anthropic_http, _ok())
+    _call_anthropic(prompt_file, base_url=FIRST_PARTY, model=model)
+
+    body = captured["body"]
+    assert isinstance(body, dict)
+    assert body["max_tokens"] == 16000
+    assert body["output_config"] == {"effort": "high"}
+    assert "fallbacks" not in body
+    headers = captured["headers"]
+    assert isinstance(headers, httpx.Headers)
+    assert "anthropic-beta" not in headers
+
+
+@pytest.mark.usefixtures("_no_effort_env")
+@pytest.mark.parametrize(
+    "model",
+    ["claude-haiku-4-5", "claude-sonnet-4-5", "claude-opus-4-6", "claude-sonnet-4-6"],
+)
 def test_anthropic_http_first_party_older_model_skips_effort(
     prompt_file: Path, monkeypatch: pytest.MonkeyPatch, model: str
 ) -> None:
@@ -341,6 +378,82 @@ def test_anthropic_http_effort_env_override(
     body = captured["body"]
     assert isinstance(body, dict)
     assert body["output_config"] == {"effort": "xhigh"}
+    assert body["max_tokens"] == 64000
+
+
+@pytest.mark.parametrize("effort", ["xhigh", "max"])
+@pytest.mark.parametrize("model", ["claude-opus-5-5", "claude-haiku-5-5"])
+def test_anthropic_http_high_effort_raises_default_budget(
+    prompt_file: Path, monkeypatch: pytest.MonkeyPatch, effort: str, model: str
+) -> None:
+    """Anthropic needs max_tokens >= 64000 at xhigh / max."""
+    monkeypatch.setenv("HYACINE_CLAUDE_EFFORT", effort)
+    captured = _mock_post(monkeypatch, anthropic_http, _ok())
+    _call_anthropic(prompt_file, base_url=FIRST_PARTY, model=model)
+    body = captured["body"]
+    assert isinstance(body, dict)
+    assert body["output_config"] == {"effort": effort}
+    assert body["max_tokens"] == 64000
+
+
+@pytest.mark.parametrize("effort", ["low", "medium", "high"])
+def test_anthropic_http_lower_effort_keeps_default_budget(
+    prompt_file: Path, monkeypatch: pytest.MonkeyPatch, effort: str
+) -> None:
+    monkeypatch.setenv("HYACINE_CLAUDE_EFFORT", effort)
+    captured = _mock_post(monkeypatch, anthropic_http, _ok())
+    _call_anthropic(prompt_file, base_url=FIRST_PARTY, model="claude-opus-5-5")
+    body = captured["body"]
+    assert isinstance(body, dict)
+    assert body["max_tokens"] == 16000
+
+
+def test_anthropic_http_high_effort_ignored_for_model_without_effort(
+    prompt_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No effort is sent to claude-haiku-4-5, so its budget stays at 16000."""
+    monkeypatch.setenv("HYACINE_CLAUDE_EFFORT", "max")
+    captured = _mock_post(monkeypatch, anthropic_http, _ok())
+    _call_anthropic(prompt_file, base_url=FIRST_PARTY, model="claude-haiku-4-5")
+    body = captured["body"]
+    assert isinstance(body, dict)
+    assert "output_config" not in body
+    assert body["max_tokens"] == 16000
+
+
+@pytest.mark.parametrize(
+    ("base_url", "model"),
+    [
+        (FIRST_PARTY, "claude-opus-5-5"),
+        (FIRST_PARTY, "claude-haiku-4-5"),
+        (RELAY, "claude-opus-5-5"),
+    ],
+)
+def test_anthropic_http_max_tokens_env_override(
+    prompt_file: Path, monkeypatch: pytest.MonkeyPatch, base_url: str, model: str
+) -> None:
+    """The override beats every default, including the xhigh / max one."""
+    monkeypatch.setenv("HYACINE_CLAUDE_EFFORT", "max")
+    monkeypatch.setenv("HYACINE_LLM_MAX_TOKENS", " 32000 ")
+    captured = _mock_post(monkeypatch, anthropic_http, _ok())
+    _call_anthropic(prompt_file, base_url=base_url, model=model)
+    body = captured["body"]
+    assert isinstance(body, dict)
+    assert body["max_tokens"] == 32000
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "abc", "1.5", "16k"])
+def test_anthropic_http_max_tokens_env_invalid(
+    prompt_file: Path, monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    monkeypatch.setenv("HYACINE_LLM_MAX_TOKENS", value)
+    captured = _mock_post(monkeypatch, anthropic_http, _ok())
+    with pytest.raises(
+        anthropic_http.AnthropicHttpError,
+        match="HYACINE_LLM_MAX_TOKENS=.* is not a positive integer",
+    ):
+        _call_anthropic(prompt_file, base_url=RELAY, model="m")
+    assert captured == {}, "no request should be sent with a bad max_tokens value"
 
 
 def test_anthropic_http_effort_env_invalid(
@@ -433,6 +546,37 @@ def test_anthropic_http_truncation_raises(
         _call_anthropic(prompt_file, base_url=RELAY, model="m")
 
 
+def test_anthropic_http_max_tokens_truncation_hints_at_fix(
+    prompt_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _mock_post(
+        monkeypatch,
+        anthropic_http,
+        {"content": [{"type": "text", "text": "half"}], "stop_reason": "max_tokens"},
+    )
+    with pytest.raises(anthropic_http.AnthropicHttpError) as exc:
+        _call_anthropic(prompt_file, base_url=RELAY, model="m")
+    assert str(exc.value) == (
+        "output truncated (stop_reason=max_tokens); the digest would be incomplete"
+        "; raise HYACINE_LLM_MAX_TOKENS (and llm_timeout_seconds) "
+        "or lower HYACINE_CLAUDE_EFFORT"
+    )
+
+
+def test_anthropic_http_context_window_truncation_has_no_budget_hint(
+    prompt_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A full context window is an input problem; more output budget won't help."""
+    _mock_post(
+        monkeypatch,
+        anthropic_http,
+        {"content": [], "stop_reason": "model_context_window_exceeded"},
+    )
+    with pytest.raises(anthropic_http.AnthropicHttpError) as exc:
+        _call_anthropic(prompt_file, base_url=RELAY, model="m")
+    assert "HYACINE_LLM_MAX_TOKENS" not in str(exc.value)
+
+
 def test_anthropic_http_string_content_returned(
     prompt_file: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -494,3 +638,57 @@ def test_openai_chat_bad_finish_reason_raises(
     )
     with pytest.raises(openai_chat.OpenAiChatError, match=match):
         _call_openai(prompt_file)
+
+
+def test_openai_chat_length_truncation_hints_at_fix(
+    prompt_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _mock_post(
+        monkeypatch,
+        openai_chat,
+        {"choices": [{"message": {"content": "half"}, "finish_reason": "length"}]},
+    )
+    with pytest.raises(openai_chat.OpenAiChatError) as exc:
+        _call_openai(prompt_file)
+    assert str(exc.value) == (
+        "output truncated (finish_reason=length); the digest would be incomplete"
+        "; raise HYACINE_LLM_MAX_TOKENS"
+    )
+
+
+@pytest.mark.parametrize(("value", "expected"), [(None, 4096), (" 8192 ", 8192)])
+def test_openai_chat_max_tokens(
+    prompt_file: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    value: str | None,
+    expected: int,
+) -> None:
+    if value is not None:
+        monkeypatch.setenv("HYACINE_LLM_MAX_TOKENS", value)
+    captured = _mock_post(
+        monkeypatch,
+        openai_chat,
+        {"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}]},
+    )
+    _call_openai(prompt_file)
+    body = captured["body"]
+    assert isinstance(body, dict)
+    assert body["max_tokens"] == expected
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "abc", "1.5"])
+def test_openai_chat_max_tokens_env_invalid(
+    prompt_file: Path, monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    monkeypatch.setenv("HYACINE_LLM_MAX_TOKENS", value)
+    captured = _mock_post(
+        monkeypatch,
+        openai_chat,
+        {"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}]},
+    )
+    with pytest.raises(
+        openai_chat.OpenAiChatError,
+        match="HYACINE_LLM_MAX_TOKENS=.* is not a positive integer",
+    ):
+        _call_openai(prompt_file)
+    assert captured == {}, "no request should be sent with a bad max_tokens value"

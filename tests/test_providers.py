@@ -99,9 +99,30 @@ def test_desktop_mirrors_default_model(rel: str, needle: str) -> None:
 # providers.test probes
 # ---------------------------------------------------------------------------
 
+@pytest.fixture(autouse=True)
+def _clean_claude_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The probe env now goes through claude_code.build_env; keep the
+    # developer's own shell (possibly itself inside Claude Code) out of it.
+    for var in (
+        "HYACINE_CLAUDE_EFFORT",
+        "HYACINE_CLAUDE_SAFE_MODE",
+        "CLAUDE_CODE_EFFORT_LEVEL",
+        "CLAUDE_CODE_SAFE_MODE",
+    ):
+        monkeypatch.delenv(var, raising=False)
+
+
 def _fake_cli_run(calls: list[dict[str, Any]]) -> Any:
     def _run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
-        calls.append({"argv": argv, **kwargs})
+        cwd = kwargs.get("cwd")
+        calls.append(
+            {
+                "argv": argv,
+                **kwargs,
+                "cwd_existed": cwd is not None and Path(cwd).is_dir(),
+                "cwd_empty": cwd is not None and not any(Path(cwd).iterdir()),
+            }
+        )
         return subprocess.CompletedProcess(argv, 0, stdout=b"pong", stderr=b"")
 
     return _run
@@ -137,6 +158,68 @@ def test_cli_probe_via_test_uses_preset_default(monkeypatch: pytest.MonkeyPatch)
     assert res["status"] == "ok"
     argv = calls[0]["argv"]
     assert argv[argv.index("--model") + 1] == DEFAULT_CLAUDE_MODEL
+
+
+def test_cli_probe_runs_like_the_daily_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Same env rules as claude_code.summarize (build_env) and an empty temp cwd."""
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        "hyacine.llm.claude_code.resolve_claude_bin", lambda _env: "/usr/bin/claude"
+    )
+    monkeypatch.setattr(providers_h.subprocess, "run", _fake_cli_run(calls))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-should-not-leak")
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "tok-should-not-leak")
+
+    res = providers_h._probe_anthropic_cli(api_key=" oauth-tok ", model="")
+
+    assert res["status"] == "ok"
+    call = calls[0]
+    env = call["env"]
+    assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "oauth-tok"
+    assert env["CLAUDE_CODE_SAFE_MODE"] == "1"
+    assert env["CLAUDE_CODE_EFFORT_LEVEL"] == "high"
+    assert "ANTHROPIC_API_KEY" not in env
+    assert "ANTHROPIC_AUTH_TOKEN" not in env
+
+    cwd = Path(call["cwd"])
+    assert cwd.name.startswith("hyacine-claude-")
+    assert cwd != Path.cwd()
+    assert call["cwd_existed"] and call["cwd_empty"]
+    assert not cwd.exists(), "temp cwd should be cleaned up"
+    assert call["stdin"] is subprocess.DEVNULL
+    assert call["timeout"] == 30
+
+
+def test_cli_probe_invalid_effort_fails_without_spawning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _boom(*_a: Any, **_kw: Any) -> Any:
+        raise AssertionError("must not get this far")
+
+    monkeypatch.setattr("hyacine.llm.claude_code.resolve_claude_bin", _boom)
+    monkeypatch.setattr(providers_h.subprocess, "run", _boom)
+    monkeypatch.setenv("HYACINE_CLAUDE_EFFORT", "ultra")
+
+    res = providers_h.test(provider_id="claude-code-oauth")
+
+    assert res["kind"] == "providers.test"
+    assert res["status"] == "fail"
+    assert res["detail"].startswith("HYACINE_CLAUDE_EFFORT='ultra' is not one of")
+
+
+def test_cli_probe_unexecutable_binary_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _raise(*_a: Any, **_kw: Any) -> Any:
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(
+        "hyacine.llm.claude_code.resolve_claude_bin", lambda _env: "/usr/bin/claude"
+    )
+    monkeypatch.setattr(providers_h.subprocess, "run", _raise)
+
+    res = providers_h._probe_anthropic_cli(api_key="", model="")
+
+    assert res["status"] == "fail"
+    assert "could not execute `claude` at '/usr/bin/claude'" in res["detail"]
 
 
 def test_http_probe_defaults_model(monkeypatch: pytest.MonkeyPatch) -> None:
