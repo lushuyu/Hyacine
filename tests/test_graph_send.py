@@ -1,7 +1,14 @@
 """Tests for hyacine.graph.send — mocked HTTP, no network."""
 from __future__ import annotations
 
+from collections.abc import Callable
+from typing import Any
 from unittest.mock import MagicMock, patch
+
+import httpx
+import pytest
+
+_REAL_CLIENT = httpx.Client
 
 
 def _make_cred() -> MagicMock:
@@ -10,6 +17,26 @@ def _make_cred() -> MagicMock:
     token.token = "fake-token"
     cred.get_token.return_value = token
     return cred
+
+
+def _route_sendmail(
+    monkeypatch: pytest.MonkeyPatch,
+    handler: Callable[[httpx.Request], httpx.Response],
+) -> tuple[list[httpx.Request], list[float]]:
+    """Send send.py's httpx.Client through a MockTransport; no real backoff."""
+    requests: list[httpx.Request] = []
+    sleeps: list[float] = []
+
+    def recording(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return handler(request)
+
+    def factory(*args: Any, **kwargs: Any) -> httpx.Client:
+        return _REAL_CLIENT(*args, transport=httpx.MockTransport(recording), **kwargs)
+
+    monkeypatch.setattr("hyacine.graph.send.httpx.Client", factory)
+    monkeypatch.setattr("hyacine.graph._http._sleep", sleeps.append)
+    return requests, sleeps
 
 
 # ---------------------------------------------------------------------------
@@ -137,3 +164,59 @@ def test_send_email_raises_on_non_2xx() -> None:
         import pytest
         with pytest.raises(RuntimeError, match="403"):
             send_email(cred, "r@x.com", "s", "body")
+
+
+# ---------------------------------------------------------------------------
+# sendMail retry policy — never risk a duplicate digest
+# ---------------------------------------------------------------------------
+
+def test_send_email_not_retried_on_read_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A ReadTimeout may mean Graph already accepted the mail: surface it, once."""
+    from hyacine.graph.send import send_email
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("no response", request=request)
+
+    requests, sleeps = _route_sendmail(monkeypatch, handler)
+
+    with pytest.raises(httpx.ReadTimeout):
+        send_email(_make_cred(), "r@x.com", "s", "body")
+
+    assert len(requests) == 1
+    assert sleeps == []
+
+
+def test_send_email_not_retried_on_500(monkeypatch: pytest.MonkeyPatch) -> None:
+    """500 is ambiguous for a non-idempotent POST; raise with Graph's body, no retry."""
+    from hyacine.graph._http import GraphHTTPError
+    from hyacine.graph.send import send_email
+
+    body = '{"error":{"code":"ErrorInternalServerError","message":"try later"}}'
+    requests, _ = _route_sendmail(monkeypatch, lambda r: httpx.Response(500, text=body))
+
+    with pytest.raises(GraphHTTPError) as excinfo:
+        send_email(_make_cred(), "r@x.com", "s", "body")
+
+    assert len(requests) == 1
+    assert "500" in str(excinfo.value)
+    assert "ErrorInternalServerError" in str(excinfo.value)
+    assert isinstance(excinfo.value, RuntimeError)
+
+
+def test_send_email_retries_throttled_post(monkeypatch: pytest.MonkeyPatch) -> None:
+    """429 means Graph refused the request, so resending is safe."""
+    from hyacine.graph.send import send_email
+
+    responses = iter([
+        httpx.Response(429, headers={"Retry-After": "4"}),
+        httpx.Response(202, headers={"request-id": "rid-after-retry"}),
+    ])
+    requests, sleeps = _route_sendmail(monkeypatch, lambda r: next(responses))
+
+    result = send_email(_make_cred(), "r@x.com", "s", "body")
+
+    assert result == "rid-after-retry"
+    assert len(requests) == 2
+    assert sleeps == [4]
+    assert requests[0].content == requests[1].content
+

