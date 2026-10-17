@@ -3,6 +3,8 @@
   import { goto } from '$app/navigation';
   import { onMount } from 'svelte';
   import { ipc } from '$lib/ipc';
+  import { formatError } from '$lib/provider-presets';
+  import { pushToast } from '$lib/stores';
   import { t, type MsgKey } from '$lib/i18n';
   import { LayoutDashboard, FileText, List, Settings, Play, Dot } from 'lucide-svelte';
   import { fade } from 'svelte/transition';
@@ -42,10 +44,15 @@
   async function runNow() {
     running = true;
     try {
-      await ipc.pipeline.run();
-      status = 'ok';
-    } catch {
+      // pipeline.run reports a failed run as {ok: false}, not by rejecting.
+      const r = await ipc.pipeline.run();
+      status = r.ok ? 'ok' : 'err';
+      if (!r.ok) {
+        pushToast('error', r.error ? `${$t('runNowFailed')}: ${r.error}` : $t('runNowFailed'));
+      }
+    } catch (e) {
       status = 'err';
+      pushToast('error', `${$t('runNowFailed')}: ${formatError(e)}`);
     } finally {
       running = false;
     }

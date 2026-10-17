@@ -117,13 +117,13 @@ export const ipc = {
 
   connectivity: {
     probe: (kind: ProbeKind, extra: Record<string, unknown> = {}) =>
-      ipc.rpc<ProbeResult>('connectivity.probe', { kind, ...extra }),
-    probeAll: (extra: Record<string, unknown> = {}) =>
-      ipc.rpc<{ results: ProbeResult[]; ok: boolean }>('connectivity.probe_all', extra)
+      ipc.rpc<ProbeResult>('connectivity.probe', { kind, ...extra })
   },
 
   graph: {
-    startDeviceFlow: () => ipc.rpc<{ started: boolean }>('graph.start_device_flow'),
+    /** `already_running`: a live flow exists; its prompt is re-emitted. */
+    startDeviceFlow: () =>
+      ipc.rpc<{ started?: boolean; already_running?: boolean }>('graph.start_device_flow'),
     cancelDeviceFlow: () => ipc.rpc<{ ok: boolean }>('graph.cancel_device_flow'),
     me: () =>
       ipc.rpc<{

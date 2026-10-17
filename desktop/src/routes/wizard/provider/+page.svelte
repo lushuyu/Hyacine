@@ -52,6 +52,19 @@
   let testDetail = $state('');
   let latencyMs = $state<number | null>(null);
   let existingForSlug = $state(false);
+  // Replace only reveals the key field. The stored key stays in the
+  // keychain until next() saves a new one over it, so backing out of the
+  // wizard (or never typing a new key) keeps the old one.
+  let replacingKey = $state(false);
+  const showStoredKey = $derived(existingForSlug && !replacingKey);
+  // What config.yaml points at right now (providers.current).
+  let savedProvider = $state<{
+    id: string;
+    api_format: ApiFormat;
+    base_url: string;
+    default_model: string;
+    secret_slug: string;
+  } | null>(null);
 
   const selectedPreset = $derived(presets.find((p) => p.id === selectedId));
   const effectiveFormat = $derived<ApiFormat>(
@@ -108,6 +121,23 @@
     !pickedModel || modelOptions.includes(pickedModel)
   );
 
+  // The webview never sees a stored key, so the only way to test one is
+  // rust_probe_claude: it tests the *saved* provider with the key read from
+  // that provider's own keychain slot. It only tests what this form shows
+  // while the form still matches the saved provider. Otherwise the key is
+  // tested on the connectivity step, once Continue has saved the choice.
+  const formMatchesSaved = $derived(
+    !!savedProvider &&
+      savedProvider.id === selectedId &&
+      savedProvider.secret_slug === slug &&
+      savedProvider.default_model === effectiveModel &&
+      (selectedId !== 'custom' ||
+        (savedProvider.api_format === customFormat && savedProvider.base_url === customBaseUrl))
+  );
+  // Local providers have no key field and run without auth.
+  const usingStoredKey = $derived(existingForSlug && !key && !isLocalProvider);
+  const storedKeyUntestable = $derived(usingStoredKey && !formMatchesSaved);
+
   onMount(async () => {
     try {
       const res = await ipc.providers.list();
@@ -122,6 +152,7 @@
     }
     try {
       const cur = await ipc.providers.current();
+      savedProvider = cur.current;
       if (cur.current?.id) selectedId = cur.current.id;
       // Custom endpoints have no preset-level format/base_url, so we have
       // to hydrate those from providers.current() explicitly — otherwise
@@ -174,6 +205,7 @@
     latencyMs = null;
     modelTouched = false;
     forceFreeText = false;
+    replacingKey = false;
     syncDefaultModel();
     refreshExistingKey();
   }
@@ -190,12 +222,12 @@
   }
 
   async function runTest() {
-    // When a key is already stored in the keychain we don't prompt for
-    // one again — we pass api_key: undefined and let the sidecar fall
-    // back to HYACINE_LLM_API_KEY, which the Rust parent populates from
-    // the active provider's keychain slot at spawn time.
-    const usingStored = existingForSlug && !key;
-    if (!usingStored && requiresKey && !validity.ok) {
+    // A stored key is tested through rust_probe_claude (see
+    // formMatchesSaved), never by calling providers.test without a key:
+    // the sidecar would then fall back to whatever key it was spawned
+    // with, which can belong to a different provider.
+    if (storedKeyUntestable) return;
+    if (!usingStoredKey && requiresKey && !validity.ok) {
       pushToast('error', `Invalid key: ${validity.reason}`);
       return;
     }
@@ -210,13 +242,15 @@
     testOk = null;
     testDetail = '';
     try {
-      const res: ProbeResult = await ipc.providers.test({
-        provider_id: selectedId === 'custom' ? '' : selectedId,
-        base_url: requiresBaseUrl ? customBaseUrl : undefined,
-        api_format: selectedId === 'custom' ? customFormat : undefined,
-        api_key: usingStored ? undefined : key || undefined,
-        model: effectiveModel || undefined
-      });
+      const res: ProbeResult = usingStoredKey
+        ? await ipc.cmd<ProbeResult>('rust_probe_claude')
+        : await ipc.providers.test({
+            provider_id: selectedId === 'custom' ? '' : selectedId,
+            base_url: requiresBaseUrl ? customBaseUrl : undefined,
+            api_format: selectedId === 'custom' ? customFormat : undefined,
+            api_key: key || undefined,
+            model: effectiveModel || undefined
+          });
       testOk = res.status === 'ok';
       testDetail = res.detail;
       latencyMs = res.latency_ms;
@@ -231,7 +265,8 @@
 
   async function next() {
     const trimmed = key.trim();
-    if (trimmed && validity.ok) {
+    const newKey = trimmed !== '' && validity.ok;
+    if (newKey) {
       await ipc.secrets.set(slug, trimmed);
       key = '';
     }
@@ -257,10 +292,24 @@
       return;
     }
 
+    // An empty CLI token field means "use `claude login`", so Replace then
+    // Continue with nothing typed drops the stored token, now that the
+    // choice is saved. Key-based providers keep theirs until replaced.
+    let dropped = false;
+    if (replacingKey && existingForSlug && !newKey && effectiveFormat === 'anthropic_cli') {
+      try {
+        await ipc.secrets.remove(slug);
+        dropped = true;
+        pushToast('info', $t('providerKeyClearedToast'));
+      } catch (e) {
+        pushToast('error', formatError(e));
+      }
+    }
+
     wizard.update((w) => ({
       ...w,
       claude: {
-        has_key: existingForSlug || (trimmed !== '' && validity.ok),
+        has_key: newKey || (existingForSlug && !dropped),
         tested: testOk === true,
         last_latency_ms: latencyMs
       }
@@ -268,12 +317,17 @@
     await goto('/wizard/graph/');
   }
 
-  async function clearStoredKey() {
-    await ipc.secrets.remove(slug);
-    existingForSlug = false;
+  function startReplaceKey() {
+    replacingKey = true;
     testOk = null;
     testDetail = '';
-    pushToast('info', $t('providerKeyClearedToast'));
+  }
+
+  function keepStoredKey() {
+    replacingKey = false;
+    key = '';
+    testOk = null;
+    testDetail = '';
   }
 
   const grouped = $derived(
@@ -508,7 +562,7 @@
 
     <!-- Key / auth section — branches on format and whether a key is already stored. -->
     {#if requiresKey}
-      {#if existingForSlug}
+      {#if showStoredKey}
         <div
           class="flex items-center gap-3 rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--bg-elev))] p-3"
         >
@@ -519,7 +573,7 @@
               {$t('providerKeyStoredNote')} {slug}
             </div>
           </div>
-          <button class="btn-ghost !text-xs" onclick={clearStoredKey}>
+          <button class="btn-ghost !text-xs" onclick={startReplaceKey}>
             {$t('providerReplace')}
           </button>
         </div>
@@ -564,10 +618,15 @@
               {$t('providerKeyLooksGood')} {maskKey(key)}
             </p>
           {/if}
+          {#if replacingKey}
+            <button type="button" class="btn-ghost !text-xs" onclick={keepStoredKey}>
+              {$t('providerKeepStoredKey')}
+            </button>
+          {/if}
         </label>
       {/if}
     {:else if effectiveFormat === 'anthropic_cli'}
-      {#if existingForSlug}
+      {#if showStoredKey}
         <div
           class="flex items-center gap-3 rounded-xl border border-[rgb(var(--border))] bg-[rgb(var(--bg-elev))] p-3"
         >
@@ -578,7 +637,7 @@
               {$t('providerKeyStoredNote')} {slug}
             </div>
           </div>
-          <button class="btn-ghost !text-xs" onclick={clearStoredKey}>
+          <button class="btn-ghost !text-xs" onclick={startReplaceKey}>
             {$t('providerReplace')}
           </button>
         </div>
@@ -647,6 +706,11 @@
                 {$t('providerKeyLooksGood')} {maskKey(key)}
               </p>
             {/if}
+            {#if replacingKey}
+              <button type="button" class="btn-ghost !text-xs" onclick={keepStoredKey}>
+                {$t('providerKeepStoredKey')}
+              </button>
+            {/if}
           </label>
         </div>
       {/if}
@@ -660,6 +724,7 @@
         disabled={testing ||
           (requiresKey && !existingForSlug && !validity.ok) ||
           keyEnteredButInvalid ||
+          storedKeyUntestable ||
           (requiresBaseUrl && !customBaseUrl)}
         onclick={runTest}
       >
@@ -681,6 +746,9 @@
         </span>
       {/if}
     </div>
+    {#if storedKeyUntestable}
+      <p class="text-xs text-[rgb(var(--fg-muted))]">{$t('providerStoredKeyTestLater')}</p>
+    {/if}
     {#if testOk === false && testDetail}
       <div class="whitespace-pre-wrap rounded-lg border border-red-500/20 bg-red-500/5 p-3 font-mono text-xs text-[rgb(var(--fg-muted))]">
         {testDetail}

@@ -130,6 +130,9 @@ const messages = {
     providerFmtAnthropicHttp: 'Claude protocol',
     providerFmtOpenaiChat: 'OpenAI protocol',
     providerKeyClearedToast: 'Stored key cleared.',
+    providerKeepStoredKey: 'Keep the stored key',
+    providerStoredKeyTestLater:
+      'The stored key is tested on the next step, once Continue saves these settings. To test it here, click Replace and paste it again.',
     providerReachableToast: 'Provider reachable',
     providerAnthropicHelp:
       'Claude protocol: enter host + base path, Hyacine appends /v1/messages.',
@@ -201,6 +204,7 @@ const messages = {
     lastRunFail: 'Last run failed',
     lastRunWarn: 'Warnings',
     lastRunNone: 'No runs yet',
+    runNowFailed: 'Run failed',
 
     // ── Dashboard ────────────────────────────────────────────────────
     dashboardTitle: 'Dashboard',
@@ -356,6 +360,9 @@ const messages = {
     providerFmtAnthropicHttp: 'Claude 协议',
     providerFmtOpenaiChat: 'OpenAI 协议',
     providerKeyClearedToast: '已清除保存的密钥。',
+    providerKeepStoredKey: '保留已保存的密钥',
+    providerStoredKeyTestLater:
+      '点击“继续”保存这些设置后，下一步会测试已保存的密钥。如需在此测试，请点击“更换”并重新粘贴密钥。',
     providerReachableToast: '连接正常',
     providerAnthropicHelp: 'Claude 协议：填入主机和基础路径，Hyacine 会自动追加 /v1/messages。',
     providerOpenaiHelp: 'OpenAI 协议：包含 /v1 段，Hyacine 会自动追加 /chat/completions。',
@@ -418,6 +425,7 @@ const messages = {
     lastRunFail: '上次运行失败',
     lastRunWarn: '有警告',
     lastRunNone: '尚未运行过',
+    runNowFailed: '运行失败',
 
     dashboardTitle: '仪表盘',
     dashboardSubtitle: '最近 14 次运行一览。',
