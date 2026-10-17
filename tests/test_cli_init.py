@@ -298,26 +298,70 @@ def test_update_resolution_preserves_existing_env(
         "Direct reports", "",
         "a",
         "alice@example.com", "UTC", "en", "07:30",
-        "common",
+        "",                             # tenant → keeps preserved-tenant
         "", "",
     ]
 
     monkeypatch.setattr("getpass.getpass", lambda _prompt="": "")
-    # Accept 'update' for .env, overwrite-without-backup semantics via 'b' for others
-    # would require a backup; simplest: skip-all for non-.env by answering 'u' then 's'
-    # Actually only .env exists, so only one prompt.
-    monkeypatch.setattr(
-        builtins, "input",
-        _answer_sequence(["u"] + answers_blank_secrets),
-    )
+    # Only .env exists, so 'u' answers the one file prompt.
+    prompts: list[str] = []
+    replies = _answer_sequence(["u"] + answers_blank_secrets)
+
+    def _input(prompt: str = "") -> str:
+        prompts.append(prompt)
+        return replies(prompt)
+
+    monkeypatch.setattr(builtins, "input", _input)
 
     rc = run_init(["--repo-root", str(repo_root)])
     assert rc == 0
 
     content = env_file.read_text(encoding="utf-8")
     assert "CLAUDE_CODE_OAUTH_TOKEN=preserved-token" in content
-    assert "HYACINE_GRAPH_TENANT_ID=common" in content
+    assert "HYACINE_GRAPH_TENANT_ID=preserved-tenant" in content
     assert "USER_CUSTOM_KEY=keep-this-too" in content
+    assert "Microsoft tenant ID (UUID or 'common') [preserved-tenant]: " in prompts
+
+
+def test_update_typed_tenant_overrides_existing_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_root = tmp_path / "repo"
+    _setup_repo(repo_root)
+    env_file = repo_root / ".env"
+    env_file.write_text("HYACINE_GRAPH_TENANT_ID=preserved-tenant\n", encoding="utf-8")
+
+    monkeypatch.setattr("getpass.getpass", lambda _prompt="": "")
+    monkeypatch.setattr(builtins, "input", _answer_sequence(["u"] + _minimal_answers()))
+
+    rc = run_init(["--repo-root", str(repo_root)])
+    assert rc == 0
+    content = env_file.read_text(encoding="utf-8")
+    assert "HYACINE_GRAPH_TENANT_ID=common" in content
+    assert "preserved-tenant" not in content
+
+
+@pytest.mark.parametrize("resolution", ["b", None])
+def test_tenant_defaults_to_common_without_update(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, resolution: str | None
+) -> None:
+    """Fresh installs and backup-and-overwrite start from 'common', not the old .env."""
+    repo_root = tmp_path / "repo"
+    _setup_repo(repo_root)
+    env_file = repo_root / ".env"
+    if resolution is not None:
+        env_file.write_text("HYACINE_GRAPH_TENANT_ID=old-tenant\n", encoding="utf-8")
+    answers = _minimal_answers()
+    answers[answers.index("common")] = ""
+    if resolution is not None:
+        answers.insert(0, resolution)
+
+    monkeypatch.setattr("getpass.getpass", lambda _prompt="": "")
+    monkeypatch.setattr(builtins, "input", _answer_sequence(answers))
+
+    rc = run_init(["--repo-root", str(repo_root)])
+    assert rc == 0
+    assert "HYACINE_GRAPH_TENANT_ID=common" in env_file.read_text(encoding="utf-8")
 
 
 _EXISTING_CONFIG = """\

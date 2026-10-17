@@ -11,7 +11,8 @@ Flow:
   6. Write config.yaml, rules.yaml, and .env. Update mode backs up each file
      it rewrites to <name>.bak-<ts> first and keeps what the wizard doesn't
      ask about: .env is merged (blank answers keep existing values, unknown
-     keys are preserved), config.yaml keeps every key except recipient_email /
+     keys are preserved, and its tenant ID becomes the tenant prompt's
+     default), config.yaml keeps every key except recipient_email /
      timezone / language / run_time (whose current values become the prompt
      defaults), rules.yaml is left untouched, and prompts/hyacine.md is
      re-rendered from the new answers.
@@ -227,12 +228,15 @@ def _current_value(
 def _collect_answers(  # noqa: C901
     args: argparse.Namespace,
     current: dict[str, object] | None = None,
+    current_env: dict[str, str] | None = None,
 ) -> dict[str, object]:
     """Ask every wizard question.
 
     *current* is the existing config.yaml in update mode: its recipient,
     timezone, language and run_time become the defaults, so pressing Enter
-    keeps them instead of resetting to UTC / en / 07:30.
+    keeps them instead of resetting to UTC / en / 07:30. *current_env* is the
+    existing .env in update mode; its HYACINE_GRAPH_TENANT_ID becomes the
+    tenant default the same way, instead of resetting to 'common'.
     """
     print("\n" + "=" * 60)
     print("  hyacine setup wizard")
@@ -307,7 +311,10 @@ def _collect_answers(  # noqa: C901
         validate=_validate_time,
     )
 
-    tenant = _ask("Microsoft tenant ID (UUID or 'common')", default="common")
+    tenant = _ask(
+        "Microsoft tenant ID (UUID or 'common')",
+        default=(current_env or {}).get("HYACINE_GRAPH_TENANT_ID", "").strip() or "common",
+    )
     if tenant != "common" and not _looks_like_uuid(tenant):
         print(_yellow("  Warning: that doesn't look like a valid UUID. Proceeding anyway."))
     answers["graph_tenant_id"] = tenant
@@ -545,17 +552,16 @@ def run_init(argv: list[str] | None = None) -> int:  # noqa: C901
         return resolutions.get(str(path)) == RESOLUTION_UPDATE
 
     existing_config = _load_existing_config(config_yaml) if _is_update(config_yaml) else None
+    existing_env = _parse_env_file(env_file) if _is_update(env_file) else None
 
     try:
-        answers = _collect_answers(args, current=existing_config)
+        answers = _collect_answers(args, current=existing_config, current_env=existing_env)
     except KeyboardInterrupt:
         print("\n\nAborted.")
         return 1
 
     prompt_content = _render_prompt(answers, repo_root)
     config_content = _build_config_yaml(answers, existing=existing_config)
-
-    existing_env = _parse_env_file(env_file) if _is_update(env_file) else None
     env_content = _build_env_file(answers, existing=existing_env)
 
     written: list[Path] = []

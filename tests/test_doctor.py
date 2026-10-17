@@ -3,13 +3,16 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
+
+from hyacine.llm.providers import Provider, by_id, resolve
 
 _REPO_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(_REPO_ROOT / "scripts"))
 
+import doctor  # noqa: E402
 from doctor import (  # noqa: E402
     FAIL,
     PASS,
@@ -21,9 +24,11 @@ from doctor import (  # noqa: E402
     check_conflicting_keys,
     check_db,
     check_env_file,
+    check_llm_api_key,
     check_oauth_token,
     check_prompt_md,
     check_rules_yaml,
+    run_checks,
 )
 
 
@@ -136,14 +141,71 @@ def test_oauth_token_env_file_blank_value_is_unset(
     assert "not set" in detail.lower()
 
 
-def test_oauth_token_environment_wins_over_env_file(
+def test_oauth_token_env_file_placeholder_not_hidden_by_shell(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """The systemd timer gets the .env value, so a good shell export can't mask it."""
     monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "tok-valid-token-value-12345")
-    env_file = _make_file(tmp_path / ".env", content="CLAUDE_CODE_OAUTH_TOKEN=sk-replace-me\n")
+    env_file = _make_file(
+        tmp_path / ".env", content="CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat-replace-me\n"
+    )
     status, _label, detail = check_oauth_token(env_file)
-    assert status == PASS
-    assert detail == ""
+    assert status == FAIL
+    assert "placeholder" in detail
+    assert str(env_file) in detail
+    assert "systemd timer" in detail
+
+
+def test_oauth_token_shell_placeholder_names_shell(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-replace-me")
+    env_file = _make_file(
+        tmp_path / ".env", content="CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-abcdefghijklmnop\n"
+    )
+    status, _label, detail = check_oauth_token(env_file)
+    assert status == FAIL
+    assert "placeholder" in detail
+    assert "shell" in detail
+    assert str(env_file) not in detail
+
+
+def test_oauth_token_shell_and_env_file_differ_warns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-shellshellshellshell")
+    env_file = _make_file(
+        tmp_path / ".env", content="CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-filefilefilefilefile\n"
+    )
+    status, _label, detail = check_oauth_token(env_file)
+    assert status == WARN
+    assert "differ" in detail
+    assert f"systemd timer uses {env_file}" in detail
+
+
+def test_oauth_token_shell_and_env_file_same_passes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-abcdefghijklmnop")
+    env_file = _make_file(
+        tmp_path / ".env", content="CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-abcdefghijklmnop\n"
+    )
+    assert check_oauth_token(env_file) == (
+        PASS, "CLAUDE_CODE_OAUTH_TOKEN is set and not a placeholder", ""
+    )
+
+
+def test_oauth_token_shell_only_warns_timer_lacks_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The user manager doesn't inherit shell rc exports, so the timer won't see it."""
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "sk-ant-oat01-abcdefghijklmnop")
+    env_file = _make_file(tmp_path / ".env", content="HYACINE_GRAPH_TENANT_ID=common\n")
+    status, _label, detail = check_oauth_token(env_file)
+    assert status == WARN
+    assert "only in the shell" in detail
+    assert "claude login" in detail
+    assert str(env_file) in detail
 
 
 def test_oauth_token_falls_back_to_claude_login(
@@ -157,13 +219,108 @@ def test_oauth_token_falls_back_to_claude_login(
     assert "claude login" in detail
 
 
-def test_oauth_token_not_needed_for_non_cli_provider(
-    monkeypatch: pytest.MonkeyPatch, isolated_home: Path
+# ---------------------------------------------------------------------------
+# check_llm_api_key
+# ---------------------------------------------------------------------------
+
+def _preset(pid: str) -> Provider:
+    provider = by_id(pid)
+    assert provider is not None
+    return provider
+
+
+@pytest.mark.parametrize("pid", ["deepseek-anthropic", "anthropic-console", "openai", "groq"])
+def test_llm_api_key_missing_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pid: str
 ) -> None:
-    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
-    status, _label, detail = check_oauth_token(None, "deepseek-anthropic")
+    monkeypatch.delenv("HYACINE_LLM_API_KEY", raising=False)
+    env_file = _make_file(tmp_path / ".env", content="CLAUDE_CODE_OAUTH_TOKEN=\n")
+    status, label, detail = check_llm_api_key(env_file, _preset(pid))
+    assert status == FAIL
+    assert pid in label
+    assert "CLAUDE_CODE_OAUTH_TOKEN" not in label
+    assert f"HYACINE_LLM_API_KEY=... to {env_file}" in detail
+    assert "401" in detail
+
+
+def test_llm_api_key_read_from_env_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("HYACINE_LLM_API_KEY", raising=False)
+    env_file = _make_file(
+        tmp_path / ".env", content="HYACINE_LLM_API_KEY=sk-deepseek-0123456789abcdef\n"
+    )
+    status, _label, detail = check_llm_api_key(env_file, _preset("deepseek-anthropic"))
     assert status == PASS
-    assert "deepseek-anthropic" in detail
+    assert "EnvironmentFile" in detail
+
+
+def test_llm_api_key_env_file_placeholder_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HYACINE_LLM_API_KEY", "sk-deepseek-0123456789abcdef")
+    env_file = _make_file(tmp_path / ".env", content="HYACINE_LLM_API_KEY=replace-me\n")
+    status, _label, detail = check_llm_api_key(env_file, _preset("deepseek-anthropic"))
+    assert status == FAIL
+    assert "placeholder" in detail
+    assert str(env_file) in detail
+
+
+def test_llm_api_key_shell_only_warns(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HYACINE_LLM_API_KEY", "sk-deepseek-0123456789abcdef")
+    env_file = _make_file(tmp_path / ".env", content="HYACINE_GRAPH_TENANT_ID=common\n")
+    status, _label, detail = check_llm_api_key(env_file, _preset("openai"))
+    assert status == WARN
+    assert "only in the shell" in detail
+    assert "send no key" in detail
+
+
+def test_llm_api_key_shell_and_env_file_differ_warns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HYACINE_LLM_API_KEY", "sk-shell-0123456789abcdef")
+    env_file = _make_file(
+        tmp_path / ".env", content="HYACINE_LLM_API_KEY=sk-file-0123456789abcdef\n"
+    )
+    status, _label, detail = check_llm_api_key(env_file, _preset("openai"))
+    assert status == WARN
+    assert "differ" in detail
+
+
+def test_llm_api_key_optional_for_local_preset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("HYACINE_LLM_API_KEY", raising=False)
+    status, label, _detail = check_llm_api_key(tmp_path / ".env", _preset("ollama-local"))
+    assert status == PASS
+    assert "optional" in label
+
+
+def test_llm_api_key_local_dummy_key_is_not_a_placeholder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Local servers ignore the key; guides suggest short dummies like this one."""
+    monkeypatch.delenv("HYACINE_LLM_API_KEY", raising=False)
+    env_file = _make_file(tmp_path / ".env", content="HYACINE_LLM_API_KEY=sk-no-key\n")
+    status, _label, _detail = check_llm_api_key(env_file, _preset("ollama-local"))
+    assert status == PASS
+
+
+@pytest.mark.parametrize(
+    ("base_url", "expected"),
+    [
+        ("http://localhost:1234/v1", PASS),
+        ("http://127.0.0.1:8000/v1", PASS),
+        ("https://llm.example.com/v1", WARN),
+    ],
+)
+def test_llm_api_key_custom_endpoint_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, base_url: str, expected: str
+) -> None:
+    """A custom endpoint may not need a key, so a missing one never hard-fails."""
+    monkeypatch.delenv("HYACINE_LLM_API_KEY", raising=False)
+    provider = resolve(api_format="openai_chat", base_url=base_url)
+    assert provider.category == "custom"
+    status, _label, _detail = check_llm_api_key(tmp_path / ".env", provider)
+    assert status == expected
 
 
 # ---------------------------------------------------------------------------
@@ -184,11 +341,12 @@ def test_oauth_token_not_needed_for_non_cli_provider(
 )
 def test_non_cli_provider(tmp_path: Path, content: str, expected: str) -> None:
     f = _make_file(tmp_path / "config.yaml", content=content)
-    assert _non_cli_provider(f) == expected
+    provider = _non_cli_provider(f)
+    assert (provider.id if provider is not None else "") == expected
 
 
 def test_non_cli_provider_missing_config(tmp_path: Path) -> None:
-    assert _non_cli_provider(tmp_path / "config.yaml") == ""
+    assert _non_cli_provider(tmp_path / "config.yaml") is None
 
 
 # ---------------------------------------------------------------------------
@@ -420,24 +578,20 @@ def test_db_exists_is_pass(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 def test_auth_record_missing(tmp_path: Path) -> None:
-    status, _label, detail = check_auth_record(tmp_path / "auth")
+    status, _label, detail = check_auth_record(tmp_path / "auth" / "auth_record.json")
     assert status == WARN
     assert "bootstrap" in detail.lower() or "run" in detail.lower()
 
 
 def test_auth_record_exists_correct_mode(tmp_path: Path) -> None:
-    auth_dir = tmp_path / "auth"
-    auth_dir.mkdir()
-    _make_file(auth_dir / "auth_record.json", content="{}", mode=0o600)
-    status, _label, _detail = check_auth_record(auth_dir)
+    record = _make_file(tmp_path / "auth" / "auth_record.json", content="{}", mode=0o600)
+    status, _label, _detail = check_auth_record(record)
     assert status == PASS
 
 
 def test_auth_record_wrong_mode(tmp_path: Path) -> None:
-    auth_dir = tmp_path / "auth"
-    auth_dir.mkdir()
-    _make_file(auth_dir / "auth_record.json", content="{}", mode=0o644)
-    status, _label, detail = check_auth_record(auth_dir)
+    record = _make_file(tmp_path / "auth" / "auth_record.json", content="{}", mode=0o644)
+    status, _label, detail = check_auth_record(record)
     assert status == WARN
     assert "644" in detail
 
@@ -504,6 +658,80 @@ def test_claude_cli_bad_bin_override_fails(monkeypatch: pytest.MonkeyPatch, tmp_
     assert "HYACINE_CLAUDE_BIN" in detail
 
 
+def _fake_version(mock_run: MagicMock) -> None:
+    mock_run.return_value.stdout = "claude 2.0.0\n"
+    mock_run.return_value.stderr = ""
+    mock_run.return_value.returncode = 0
+
+
+def test_claude_cli_env_file_bad_bin_not_hidden_by_shell(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The timer resolves the .env override, so a good shell one can't mask it."""
+    good = _make_file(tmp_path / "opt" / "claude", content="#!/bin/sh\n", mode=0o755)
+    monkeypatch.setenv("HYACINE_CLAUDE_BIN", str(good))
+    env_file = _make_file(tmp_path / ".env", content=f"HYACINE_CLAUDE_BIN={tmp_path / 'gone'}\n")
+    status, _label, detail = check_claude_cli(env_file)
+    assert status == FAIL
+    assert "gone" in detail
+    assert str(env_file) in detail
+    assert "systemd timer" in detail
+
+
+def test_claude_cli_shell_bad_bin_names_shell(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    good = _make_file(tmp_path / "opt" / "claude", content="#!/bin/sh\n", mode=0o755)
+    monkeypatch.setenv("HYACINE_CLAUDE_BIN", str(tmp_path / "gone"))
+    env_file = _make_file(tmp_path / ".env", content=f"HYACINE_CLAUDE_BIN={good}\n")
+    status, _label, detail = check_claude_cli(env_file)
+    assert status == FAIL
+    assert "gone" in detail
+    assert "shell" in detail
+
+
+def test_claude_cli_shell_and_env_file_bins_differ_warns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from_file = _make_file(tmp_path / "a" / "claude", content="#!/bin/sh\n", mode=0o755)
+    from_shell = _make_file(tmp_path / "b" / "claude", content="#!/bin/sh\n", mode=0o755)
+    monkeypatch.setenv("HYACINE_CLAUDE_BIN", str(from_shell))
+    env_file = _make_file(tmp_path / ".env", content=f"HYACINE_CLAUDE_BIN={from_file}\n")
+    with patch("subprocess.run") as mock_run:
+        _fake_version(mock_run)
+        status, _label, detail = check_claude_cli(env_file)
+    assert status == WARN
+    assert mock_run.call_args.args[0] == [str(from_file), "--version"]
+    assert "differ" in detail
+    assert str(from_shell) in detail
+
+
+def test_claude_cli_shell_and_env_file_same_bin_passes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    claude = _make_file(tmp_path / "opt" / "claude", content="#!/bin/sh\n", mode=0o755)
+    monkeypatch.setenv("HYACINE_CLAUDE_BIN", str(claude))
+    env_file = _make_file(tmp_path / ".env", content=f"HYACINE_CLAUDE_BIN={claude}\n")
+    with patch("subprocess.run") as mock_run:
+        _fake_version(mock_run)
+        status, _label, _detail = check_claude_cli(env_file)
+    assert status == PASS
+
+
+def test_claude_cli_shell_only_bin_warns_timer_lacks_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    claude = _make_file(tmp_path / "opt" / "claude", content="#!/bin/sh\n", mode=0o755)
+    monkeypatch.setenv("HYACINE_CLAUDE_BIN", str(claude))
+    env_file = _make_file(tmp_path / ".env", content="HYACINE_GRAPH_TENANT_ID=common\n")
+    with patch("subprocess.run") as mock_run:
+        _fake_version(mock_run)
+        status, _label, detail = check_claude_cli(env_file)
+    assert status == WARN
+    assert mock_run.call_args.args[0] == [str(claude), "--version"]
+    assert "only in the shell" in detail
+
+
 def test_claude_cli_nonzero_version_exit_warns(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("HYACINE_CLAUDE_BIN", raising=False)
     with patch("shutil.which", return_value="/usr/bin/claude"), patch("subprocess.run") as mock_run:
@@ -517,6 +745,81 @@ def test_claude_cli_nonzero_version_exit_warns(monkeypatch: pytest.MonkeyPatch) 
 
 def test_claude_cli_not_needed_for_non_cli_provider() -> None:
     with patch("shutil.which", return_value=None):
-        status, _label, detail = check_claude_cli(None, "openai")
+        status, label, detail = check_claude_cli(None, "openai")
     assert status == PASS
+    assert "reachable" not in label
     assert "openai" in detail
+
+
+# ---------------------------------------------------------------------------
+# run_checks
+# ---------------------------------------------------------------------------
+
+def _make_repo(
+    root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    config: str,
+    env: str = "",
+) -> Path:
+    """A repo where every check but the LLM credential one passes."""
+    _make_file(root / ".env", content=env)
+    _make_file(root / "config" / "config.yaml", content=f"recipient_email: a@b.com\n{config}")
+    _make_file(root / "config" / "rules.yaml", content="rules: []\n")
+    _make_file(root / "prompts" / "hyacine.md", content="You are Alice's assistant.\n")
+    _make_file(root / "data" / "hyacine.db", content="SQLite format")
+    _make_file(root / "data" / "auth" / "auth_record.json", content="{}")
+    monkeypatch.setenv("HYACINE_REPO_ROOT", str(root))
+    for key in (
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "HYACINE_LLM_API_KEY",
+        "HYACINE_CLAUDE_BIN",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "HYACINE_AUTH_DIR",
+        "HYACINE_AUTH_RECORD_PATH",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr(doctor, "check_systemctl", lambda: (PASS, "systemctl", ""))
+    return root
+
+
+def test_run_checks_http_provider_without_key_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _make_repo(tmp_path / "repo", monkeypatch, config="llm_provider: deepseek-anthropic\n")
+    assert run_checks() == 2
+    out = capsys.readouterr().out
+    assert "HYACINE_LLM_API_KEY is set for llm_provider 'deepseek-anthropic'" in out
+    assert "CLAUDE_CODE_OAUTH_TOKEN is set" not in out
+
+
+def test_run_checks_http_provider_with_env_file_key_passes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _make_repo(
+        tmp_path / "repo",
+        monkeypatch,
+        config="llm_provider: deepseek-anthropic\n",
+        env="HYACINE_LLM_API_KEY=sk-deepseek-0123456789abcdef\n",
+    )
+    assert run_checks() == 0, capsys.readouterr().out
+
+
+def test_run_checks_local_provider_without_key_passes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _make_repo(tmp_path / "repo", monkeypatch, config="llm_provider: ollama-local\n")
+    assert run_checks() == 0, capsys.readouterr().out
+
+
+def test_run_checks_uses_auth_record_path_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """bootstrap_auth writes Settings.auth_record_path, so doctor must look there."""
+    repo = _make_repo(tmp_path / "repo", monkeypatch, config="llm_provider: ollama-local\n")
+    (repo / "data" / "auth" / "auth_record.json").unlink()
+    record = _make_file(tmp_path / "srv" / "rec.json", content="{}")
+    monkeypatch.setenv("HYACINE_AUTH_RECORD_PATH", str(record))
+    assert run_checks() == 0
+    assert f"Graph auth record exists at {record}" in capsys.readouterr().out
