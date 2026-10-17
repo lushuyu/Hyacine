@@ -50,9 +50,6 @@ struct PendingCall {
 
 /// Default budget for a call. Probes and config reads finish in seconds.
 const RPC_TIMEOUT: Duration = Duration::from_secs(60);
-/// `connectivity.probe_all` runs the DNS, Claude, Graph and sendMail probes
-/// back to back, each with its own network timeout.
-const PROBE_ALL_TIMEOUT: Duration = Duration::from_secs(3 * 60);
 /// Pipeline time outside the LLM call: paged Graph fetch with retry/backoff,
 /// rendering and sendMail.
 const PIPELINE_MARGIN: Duration = Duration::from_secs(15 * 60);
@@ -455,7 +452,6 @@ fn rpc_timeout(method: &str, data_root: Option<&Path>) -> Duration {
         "pipeline.run" | "pipeline.dry_run" => pipeline_timeout(
             read_config_hints(data_root).and_then(|h| h.llm_timeout_seconds),
         ),
-        "connectivity.probe_all" => PROBE_ALL_TIMEOUT,
         _ => RPC_TIMEOUT,
     }
 }
@@ -790,7 +786,7 @@ mod tests {
         assert_eq!(rpc_timeout("pipeline.dry_run", Some(&root)), expected);
         assert_eq!(rpc_timeout("config.read", Some(&root)), RPC_TIMEOUT);
         assert_eq!(rpc_timeout("providers.test", Some(&root)), RPC_TIMEOUT);
-        assert_eq!(rpc_timeout("connectivity.probe_all", Some(&root)), PROBE_ALL_TIMEOUT);
+        assert_eq!(rpc_timeout("connectivity.probe", Some(&root)), RPC_TIMEOUT);
         // No config yet (first run): fall back to the default LLM timeout.
         assert_eq!(rpc_timeout("pipeline.run", None), pipeline_timeout(None));
 

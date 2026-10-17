@@ -100,12 +100,18 @@ pub async fn rust_probe_claude(
 ///
 /// The sidecar's `HYACINE_LLM_API_KEY` belongs to the *active* provider,
 /// not necessarily the one under test, so it must not stand in for a
-/// missing key. The slot is derived here from the provider under test (a
-/// preset's `secret_slug`, or `custom` for a custom endpoint) and only that
-/// slot is read, with no legacy-slot fallback.
+/// missing key. The slot is derived here from the provider under test and
+/// read only when the request goes where that key was stored for:
 ///
-/// A non-empty `api_key` (a key the user just typed) is used as is, so the
-/// page can make every test through this one command.
+/// * a preset id reads the preset's slot and is tested at the preset's own
+///   endpoint; a `base_url` / `api_format` pointing elsewhere is refused;
+/// * an empty id reads the shared `custom` slot, and only when the saved
+///   provider is that same custom endpoint (format and base URL);
+/// * any other id is refused, never mapped to a slot with the same name.
+///
+/// A refusal is a `fail` result asking for the key, and reads no keychain
+/// slot. A non-empty `api_key` (a key the user just typed) is used as is,
+/// so the page can make every test through this one command.
 #[tauri::command(rename_all = "camelCase")]
 pub async fn rust_provider_test(
     app: AppHandle,
@@ -117,19 +123,32 @@ pub async fn rust_provider_test(
     api_key: Option<String>,
 ) -> AppResult<serde_json::Value> {
     let provider_id = provider_id.unwrap_or_default().trim().to_string();
+    let mut base_url = base_url.unwrap_or_default();
+    let mut api_format = api_format.unwrap_or_default();
     let typed = api_key.unwrap_or_default().trim().to_string();
     let key = if !typed.is_empty() {
         typed
     } else {
-        let slug = if provider_id.is_empty() {
-            "custom".to_string()
+        let slot = if provider_id.is_empty() {
+            let cur = state
+                .rpc::<serde_json::Value>(&app, "providers.current", json!({}))
+                .await?;
+            custom_slot(&cur, &base_url, &api_format)
         } else {
             let list = state
                 .rpc::<serde_json::Value>(&app, "providers.list", json!({}))
                 .await?;
-            preset_secret_slug(&list, &provider_id)
+            let slot = preset_slot(&list, &provider_id, &base_url, &api_format);
+            // providers.test fills in the preset's own endpoint.
+            base_url.clear();
+            api_format.clear();
+            slot
         };
-        secrets::get(&slug)?
+        let slot = match slot {
+            Ok(slot) => slot,
+            Err(reason) => return Ok(stored_key_refused(reason)),
+        };
+        secrets::get(&slot)?
             .map(|k| k.trim().to_string())
             .unwrap_or_default()
     };
@@ -140,8 +159,8 @@ pub async fn rust_provider_test(
             "providers.test",
             json!({
                 "provider_id": provider_id,
-                "base_url": base_url.unwrap_or_default(),
-                "api_format": api_format.unwrap_or_default(),
+                "base_url": base_url,
+                "api_format": api_format,
                 "model": model.unwrap_or_default(),
                 "api_key": key,
             }),
@@ -149,19 +168,75 @@ pub async fn rust_provider_test(
         .await
 }
 
-/// Keychain slot for `provider_id`, as `providers.resolve` picks it: the
-/// preset's own `secret_slug`, else the id itself.
-fn preset_secret_slug(list: &serde_json::Value, provider_id: &str) -> String {
-    list.get("providers")
+/// The `providers.test` result for a test that would need a stored key
+/// somewhere it doesn't belong.
+fn stored_key_refused(reason: &str) -> serde_json::Value {
+    json!({
+        "kind": "providers.test",
+        "status": "fail",
+        "latency_ms": 0,
+        "detail": format!("enter the key to test this endpoint ({reason})"),
+    })
+}
+
+fn str_field<'a>(v: &'a serde_json::Value, name: &str) -> &'a str {
+    v.get(name).and_then(|x| x.as_str()).unwrap_or("")
+}
+
+/// Same endpoint, ignoring surrounding whitespace and trailing `/`.
+fn same_base_url(a: &str, b: &str) -> bool {
+    a.trim().trim_end_matches('/') == b.trim().trim_end_matches('/')
+}
+
+/// Keychain slot of preset `provider_id`, as `providers.resolve` picks it:
+/// the preset's own `secret_slug`, else its id. An id that is not in
+/// `providers.list` gets no slot, and neither does a request whose
+/// `base_url` / `api_format` differs from the preset's (empty means the
+/// preset's own).
+fn preset_slot(
+    list: &serde_json::Value,
+    provider_id: &str,
+    base_url: &str,
+    api_format: &str,
+) -> Result<String, &'static str> {
+    let preset = list
+        .get("providers")
         .and_then(|p| p.as_array())
         .into_iter()
         .flatten()
-        .find(|p| p.get("id").and_then(|x| x.as_str()) == Some(provider_id))
-        .and_then(|p| p.get("secret_slug"))
-        .and_then(|x| x.as_str())
-        .filter(|s| !s.is_empty())
-        .unwrap_or(provider_id)
-        .to_string()
+        .find(|p| str_field(p, "id") == provider_id)
+        .ok_or("no stored key belongs to an unknown provider")?;
+    let format_differs =
+        !api_format.trim().is_empty() && api_format.trim() != str_field(preset, "api_format");
+    let url_differs =
+        !base_url.trim().is_empty() && !same_base_url(base_url, str_field(preset, "base_url"));
+    if format_differs || url_differs {
+        return Err("a preset's stored key is only sent to that preset's own endpoint");
+    }
+    let slug = str_field(preset, "secret_slug");
+    Ok(if slug.is_empty() { provider_id } else { slug }.to_string())
+}
+
+/// The shared `custom` slot, when `providers.current` says the saved
+/// provider is the custom endpoint under test: same format, same base URL.
+/// Editing either, or picking Custom while a preset is active, needs the
+/// key for the new endpoint.
+fn custom_slot(
+    current: &serde_json::Value,
+    base_url: &str,
+    api_format: &str,
+) -> Result<String, &'static str> {
+    let saved = current.get("current").unwrap_or(&serde_json::Value::Null);
+    let matches = str_field(saved, "id") == "custom"
+        && !api_format.trim().is_empty()
+        && str_field(saved, "api_format") == api_format.trim()
+        && !base_url.trim().is_empty()
+        && same_base_url(str_field(saved, "base_url"), base_url);
+    if matches {
+        Ok("custom".to_string())
+    } else {
+        Err("the stored custom key is only used for the saved custom endpoint")
+    }
 }
 
 #[tauri::command]
@@ -234,21 +309,91 @@ pub async fn rust_probe_sendmail(
 
 #[cfg(test)]
 mod tests {
-    use super::preset_secret_slug;
+    use super::{custom_slot, preset_slot, stored_key_refused};
     use serde_json::json;
+
+    fn presets() -> serde_json::Value {
+        json!({"providers": [
+            {"id": "claude-code-oauth", "api_format": "anthropic_cli", "base_url": "",
+             "secret_slug": "claude-code-oauth"},
+            {"id": "anthropic-console", "api_format": "anthropic_http",
+             "base_url": "https://api.anthropic.com", "secret_slug": "anthropic-console"},
+            {"id": "deepseek-anthropic", "api_format": "anthropic_http",
+             "base_url": "https://api.deepseek.com/anthropic", "secret_slug": "deepseek"},
+            {"id": "groq", "api_format": "openai_chat",
+             "base_url": "https://api.groq.com/openai/v1", "secret_slug": ""},
+        ]})
+    }
 
     #[test]
     fn stored_key_slot_comes_from_the_provider_under_test() {
-        let list = json!({"providers": [
-            {"id": "anthropic-console", "secret_slug": "anthropic-console"},
-            {"id": "deepseek-anthropic", "secret_slug": "deepseek"},
-            {"id": "groq", "secret_slug": ""},
-        ]});
-        assert_eq!(preset_secret_slug(&list, "deepseek-anthropic"), "deepseek");
-        assert_eq!(preset_secret_slug(&list, "anthropic-console"), "anthropic-console");
-        // Blank or unknown: the id itself, never another provider's slot.
-        assert_eq!(preset_secret_slug(&list, "groq"), "groq");
-        assert_eq!(preset_secret_slug(&list, "kimi-anthropic"), "kimi-anthropic");
-        assert_eq!(preset_secret_slug(&json!({}), "openai"), "openai");
+        let list = presets();
+        assert_eq!(preset_slot(&list, "deepseek-anthropic", "", "").unwrap(), "deepseek");
+        assert_eq!(preset_slot(&list, "anthropic-console", "", "").unwrap(), "anthropic-console");
+        assert_eq!(preset_slot(&list, "claude-code-oauth", "", "").unwrap(), "claude-code-oauth");
+        // A blank secret_slug falls back to the preset's own id.
+        assert_eq!(preset_slot(&list, "groq", "", "").unwrap(), "groq");
+    }
+
+    #[test]
+    fn unknown_ids_get_no_slot() {
+        // Never a keychain slot that merely shares the id's name.
+        assert!(preset_slot(&presets(), "claude", "", "").is_err());
+        assert!(preset_slot(&presets(), "custom", "", "").is_err());
+        assert!(preset_slot(&presets(), "kimi-anthropic", "", "").is_err());
+        assert!(preset_slot(&json!({}), "openai", "", "").is_err());
+    }
+
+    #[test]
+    fn a_preset_key_only_goes_to_the_preset_endpoint() {
+        let list = presets();
+        // Restating the preset's own endpoint is fine.
+        assert!(preset_slot(&list, "groq", "https://api.groq.com/openai/v1/", "openai_chat").is_ok());
+        assert!(preset_slot(&list, "anthropic-console", "https://api.anthropic.com", "").is_ok());
+        // Pointing it anywhere else is not.
+        assert!(preset_slot(&list, "anthropic-console", "https://x.example", "").is_err());
+        assert!(preset_slot(&list, "claude-code-oauth", "https://x.example", "openai_chat").is_err());
+        assert!(preset_slot(&list, "claude-code-oauth", "", "openai_chat").is_err());
+        assert!(preset_slot(&list, "deepseek-anthropic", "", "openai_chat").is_err());
+    }
+
+    #[test]
+    fn the_custom_key_only_goes_to_the_saved_custom_endpoint() {
+        let saved = json!({"current": {
+            "id": "custom", "api_format": "openai_chat",
+            "base_url": "https://relay-a.example/v1", "secret_slug": "custom",
+        }});
+        assert_eq!(
+            custom_slot(&saved, "https://relay-a.example/v1", "openai_chat").unwrap(),
+            "custom"
+        );
+        assert!(custom_slot(&saved, "https://relay-a.example/v1/", "openai_chat").is_ok());
+        assert!(custom_slot(&saved, " https://relay-a.example/v1 ", "openai_chat").is_ok());
+
+        // Another host or path, another format, or no endpoint at all.
+        assert!(custom_slot(&saved, "https://relay-b.example/v1", "openai_chat").is_err());
+        assert!(custom_slot(&saved, "https://relay-a.example", "openai_chat").is_err());
+        assert!(custom_slot(&saved, "https://relay-a.example/v1", "anthropic_http").is_err());
+        assert!(custom_slot(&saved, "", "openai_chat").is_err());
+        assert!(custom_slot(&saved, "https://relay-a.example/v1", "").is_err());
+
+        // A preset is active, though an old custom key may still be stored.
+        let preset = json!({"current": {
+            "id": "anthropic-console", "api_format": "anthropic_http",
+            "base_url": "https://api.anthropic.com", "secret_slug": "anthropic-console",
+        }});
+        assert!(custom_slot(&preset, "https://api.anthropic.com", "anthropic_http").is_err());
+        let none = json!({"current": null});
+        assert!(custom_slot(&none, "https://relay-a.example/v1", "openai_chat").is_err());
+        assert!(custom_slot(&json!({}), "https://relay-a.example/v1", "openai_chat").is_err());
+    }
+
+    #[test]
+    fn a_refusal_is_a_failed_probe_asking_for_the_key() {
+        let v = stored_key_refused("why");
+        assert_eq!(v["kind"], "providers.test");
+        assert_eq!(v["status"], "fail");
+        assert_eq!(v["latency_ms"], 0);
+        assert_eq!(v["detail"], "enter the key to test this endpoint (why)");
     }
 }

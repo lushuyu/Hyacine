@@ -42,6 +42,9 @@
 
   // Key entry state.
   let key = $state('');
+  // Slug the typed key was entered under. A key typed for one provider is
+  // never tested against, or saved over, another provider's slot.
+  let keySlug = $state('');
   let showKey = $state(false);
   let revealTimer: ReturnType<typeof setTimeout> | null = null;
   const validity = $derived(isClaudeKey(key));
@@ -52,12 +55,28 @@
   let testDetail = $state('');
   let latencyMs = $state<number | null>(null);
   let existingForSlug = $state(false);
+  // The provider config.yaml has saved, from providers.current.
+  let savedProvider = $state<{ id: string; api_format: ApiFormat; base_url: string } | null>(null);
   // Replace only reveals the key field. The stored key stays in the
   // keychain until next() saves a new one over it, so backing out of the
   // wizard (or never typing a new key) keeps the old one.
   let replacingKey = $state(false);
-  const showStoredKey = $derived(existingForSlug && !replacingKey);
   const selectedPreset = $derived(presets.find((p) => p.id === selectedId));
+  // A stored key only goes to the endpoint it was saved for, as in
+  // rust_provider_test. A preset's endpoint is fixed, but the shared
+  // `custom` slot belongs to the saved custom endpoint: after editing its
+  // format or base URL (or picking Custom while a preset is saved) the
+  // form needs the key for the new endpoint.
+  const trimSlash = (u: string) => u.trim().replace(/\/+$/, '');
+  const storedKeyFitsForm = $derived(
+    selectedId !== 'custom' ||
+      (savedProvider?.id === 'custom' &&
+        savedProvider.api_format === customFormat &&
+        trimSlash(savedProvider.base_url) !== '' &&
+        trimSlash(savedProvider.base_url) === trimSlash(customBaseUrl))
+  );
+  const hasUsableStoredKey = $derived(existingForSlug && storedKeyFitsForm);
+  const showStoredKey = $derived(hasUsableStoredKey && !replacingKey);
   const effectiveFormat = $derived<ApiFormat>(
     selectedId === 'custom' ? customFormat : (selectedPreset?.api_format ?? 'anthropic_cli')
   );
@@ -115,8 +134,16 @@
   // The webview never sees a stored key. rust_provider_test reads the key
   // from the keychain slot of the provider this form shows (never the
   // sidecar's key, which belongs to the active provider) and tests it.
-  // Local providers have no key field and run without auth.
-  const usingStoredKey = $derived(existingForSlug && !key && !isLocalProvider);
+  // Local providers have no key field and run without auth. Replace means
+  // the stored key is on its way out, so it is not what gets tested.
+  const usingStoredKey = $derived(
+    hasUsableStoredKey && !replacingKey && !key && !isLocalProvider
+  );
+  // Replace on the CLI with nothing typed means "use `claude login`" (next()
+  // then drops the stored token), so test exactly that.
+  const testCliLogin = $derived(
+    effectiveFormat === 'anthropic_cli' && replacingKey && key.trim() === ''
+  );
 
   onMount(async () => {
     try {
@@ -132,6 +159,7 @@
     }
     try {
       const cur = await ipc.providers.current();
+      savedProvider = cur.current ?? null;
       if (cur.current?.id) selectedId = cur.current.id;
       // Custom endpoints have no preset-level format/base_url, so we have
       // to hydrate those from providers.current() explicitly — otherwise
@@ -185,6 +213,8 @@
     modelTouched = false;
     forceFreeText = false;
     replacingKey = false;
+    // A key typed for the previous provider must not follow the user here.
+    clearTypedKey();
     syncDefaultModel();
     refreshExistingKey();
   }
@@ -200,7 +230,31 @@
     if (showKey) revealTimer = setTimeout(() => (showKey = false), 3000);
   }
 
+  function onKeyInput() {
+    keySlug = slug;
+  }
+
+  function clearTypedKey() {
+    key = '';
+    showKey = false;
+    if (revealTimer) {
+      clearTimeout(revealTimer);
+      revealTimer = null;
+    }
+  }
+
+  /** Clear a typed key that belongs to another provider's slot (the
+   *  provider can still change under it while the page hydrates). True
+   *  when it did, so the caller stops. */
+  function droppedForeignKey(): boolean {
+    if (!key || keySlug === slug) return false;
+    clearTypedKey();
+    pushToast('error', $t('providerKeyForOtherProvider'));
+    return true;
+  }
+
   async function runTest() {
+    if (droppedForeignKey()) return;
     // A stored key is tested through rust_provider_test (see
     // usingStoredKey), never by calling providers.test without a key.
     if (!usingStoredKey && requiresKey && !validity.ok) {
@@ -230,7 +284,8 @@
             base_url: requiresBaseUrl ? customBaseUrl : undefined,
             api_format: selectedId === 'custom' ? customFormat : undefined,
             api_key: key || undefined,
-            model: effectiveModel || undefined
+            model: effectiveModel || undefined,
+            use_cli_login: testCliLogin || undefined
           });
       testOk = res.status === 'ok';
       testDetail = res.detail;
@@ -245,11 +300,12 @@
   }
 
   async function next() {
+    if (droppedForeignKey()) return;
     const trimmed = key.trim();
     const newKey = trimmed !== '' && validity.ok;
     if (newKey) {
       await ipc.secrets.set(slug, trimmed);
-      key = '';
+      clearTypedKey();
     }
     try {
       const fields: Record<string, unknown> = {};
@@ -306,7 +362,7 @@
 
   function keepStoredKey() {
     replacingKey = false;
-    key = '';
+    clearTypedKey();
     testOk = null;
     testDetail = '';
   }
@@ -569,6 +625,7 @@
                 class="input pr-20 font-mono text-xs"
                 type="text"
                 bind:value={key}
+                oninput={onKeyInput}
                 autocomplete="off"
                 spellcheck="false"
                 placeholder="sk-…"
@@ -578,6 +635,7 @@
                 class="input pr-20 font-mono text-xs"
                 type="password"
                 bind:value={key}
+                oninput={onKeyInput}
                 autocomplete="off"
                 spellcheck="false"
                 placeholder="sk-…"
@@ -598,8 +656,10 @@
             <p class="text-xs text-[rgb(var(--fg-muted))]">
               {$t('providerKeyLooksGood')} {maskKey(key)}
             </p>
+          {:else if existingForSlug && !storedKeyFitsForm}
+            <p class="text-[11px] text-[rgb(var(--fg-muted))]">{$t('providerKeyOtherEndpoint')}</p>
           {/if}
-          {#if replacingKey}
+          {#if replacingKey && hasUsableStoredKey}
             <button type="button" class="btn-ghost !text-xs" onclick={keepStoredKey}>
               {$t('providerKeepStoredKey')}
             </button>
@@ -656,6 +716,7 @@
                   class="input pr-20 font-mono text-xs"
                   type="text"
                   bind:value={key}
+                  oninput={onKeyInput}
                   autocomplete="off"
                   spellcheck="false"
                   placeholder="sk-ant-oat01-…"
@@ -665,6 +726,7 @@
                   class="input pr-20 font-mono text-xs"
                   type="password"
                   bind:value={key}
+                  oninput={onKeyInput}
                   autocomplete="off"
                   spellcheck="false"
                   placeholder="sk-ant-oat01-…"
@@ -703,7 +765,7 @@
       <button
         class="btn-secondary"
         disabled={testing ||
-          (requiresKey && !existingForSlug && !validity.ok) ||
+          (requiresKey && !usingStoredKey && !validity.ok) ||
           keyEnteredButInvalid ||
           (requiresBaseUrl && !customBaseUrl)}
         onclick={runTest}
@@ -745,7 +807,7 @@
   <div class="flex justify-end pt-2">
     <button
       class="btn-primary"
-      disabled={(requiresKey && !existingForSlug && !validity.ok) || keyEnteredButInvalid}
+      disabled={(requiresKey && !hasUsableStoredKey && !validity.ok) || keyEnteredButInvalid}
       onclick={next}
     >
       {$t('continue')}

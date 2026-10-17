@@ -137,7 +137,21 @@ export const ipc = {
 
   pipeline: {
     dryRun: () => ipc.rpc<DryRunResult>('pipeline.dry_run'),
-    run: () => ipc.rpc<{ ok: boolean; duration_ms: number; error?: string }>('pipeline.run'),
+    /** `error` summarises why a run failed. `delivery_uncertain`: sendMail
+     *  may have gone through, so running again could mail it twice. */
+    run: () =>
+      ipc.rpc<{
+        ok: boolean;
+        duration_ms: number;
+        error?: string;
+        delivery_uncertain?: boolean;
+        record?: {
+          id: number | null;
+          status: string;
+          email_count: number;
+          sent_message_id: string | null;
+        };
+      }>('pipeline.run'),
     history: (limit = 14) =>
       ipc.rpc<{ runs: Record<string, unknown>[] }>('pipeline.history', { limit })
   },
@@ -162,6 +176,8 @@ export const ipc = {
       api_format?: ApiFormat;
       api_key?: string;
       model?: string;
+      /** anthropic_cli only: test `claude login`, ignoring any stored token. */
+      use_cli_login?: boolean;
     }) => ipc.rpc<ProbeResult>('providers.test', params as Record<string, unknown>)
   }
 };

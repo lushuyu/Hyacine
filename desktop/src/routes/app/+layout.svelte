@@ -47,7 +47,11 @@
       // pipeline.run reports a failed run as {ok: false}, not by rejecting.
       const r = await ipc.pipeline.run();
       status = r.ok ? 'ok' : 'err';
-      if (!r.ok) {
+      if (!r.ok && r.delivery_uncertain) {
+        // sendMail may have gone through: say so before the user re-runs
+        // and mails the digest twice.
+        pushToast('warning', $t('runNowDeliveryUncertain'), 12000);
+      } else if (!r.ok) {
         pushToast('error', r.error ? `${$t('runNowFailed')}: ${r.error}` : $t('runNowFailed'));
       }
     } catch (e) {

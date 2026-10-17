@@ -89,9 +89,9 @@ export function setTheme(t: Theme) {
   document.documentElement.classList.toggle('dark', dark);
 }
 
-export const toast = writable<{ id: number; kind: 'info' | 'error' | 'success'; msg: string }[]>(
-  []
-);
+export type ToastKind = 'info' | 'warning' | 'error' | 'success';
+
+export const toast = writable<{ id: number; kind: ToastKind; msg: string }[]>([]);
 
 /**
  * Global sidecar error surface. The root layout populates this on
@@ -104,7 +104,7 @@ export const toast = writable<{ id: number; kind: 'info' | 'error' | 'success'; 
 export const sidecarError = writable<string>('');
 
 let tid = 0;
-export function pushToast(kind: 'info' | 'error' | 'success', msg: string, ttl = 3500) {
+export function pushToast(kind: ToastKind, msg: string, ttl = 3500) {
   const id = ++tid;
   toast.update((list) => [...list, { id, kind, msg }]);
   setTimeout(() => {
