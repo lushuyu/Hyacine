@@ -20,7 +20,7 @@ Hyacine/
 │   │   └── handlers/               area-scoped handlers
 │   │       ├── system_h.py         ping, version, paths
 │   │       ├── config_h.py         read/write config, prompt, rules
-│   │       ├── connectivity_h.py   DNS/Claude/Graph/SendMail probes
+│   │       ├── connectivity_h.py   DNS/Graph/SendMail probes
 │   │       ├── graph_h.py          device-code OAuth + /me
 │   │       └── pipeline_h.py       dry_run, run, history
 │   ├── cli/ · graph/ · llm/ · …   existing pipeline (unchanged)
@@ -61,6 +61,19 @@ Three processes cooperate:
 The Rust main never blocks on the network for anything the Python sidecar
 already knows how to do — it just owns secrets and routes. Everything
 business-logic-shaped (Graph, Claude, pipeline) lives in Python.
+
+Sidecar lifecycle: Rust starts the sidecar on the first call that needs it
+and respawns it on the next call after it dies. Saving or removing a secret,
+or a `config.write`, marks its credentials stale; the next call respawns it
+(once no call is in flight) so new keys reach `HYACINE_LLM_API_KEY` without
+relaunching the app. `pipeline.run` / `pipeline.dry_run` time out after
+`llm_timeout_seconds` + 15 min; every other call after 60 s.
+
+Data directory: Rust resolves one data root, `HYACINE_REPO_ROOT` if set,
+otherwise the per-user app data dir (`~/.local/share/com.hyacine.desktop`,
+`~/Library/Application Support/com.hyacine.desktop`,
+`%LOCALAPPDATA%\com.hyacine.desktop`), passes it to the sidecar as
+`HYACINE_REPO_ROOT`, and reads `config.yaml` from the same place.
 
 ## Request/response protocol
 

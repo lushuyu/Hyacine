@@ -49,6 +49,11 @@ The dev loop spawns `python3 -m hyacine.ipc` as a sidecar fallback so you can
 iterate without rebuilding the Python binary. For release builds, a bundled
 standalone Python binary is expected at `src-tauri/binaries/hyacine-ipc<EXT>`.
 
+Config, the run database and the Graph sign-in live in the per-user app data
+dir (`~/.local/share/com.hyacine.desktop` on Linux), in dev and release alike.
+Export `HYACINE_REPO_ROOT=<repo checkout>` to point the app at a checkout
+instead.
+
 ### Developing inside WSL 2
 
 `npm run tauri:dev` works natively on WSL 2 as long as WSLg is available

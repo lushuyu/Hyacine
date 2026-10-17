@@ -94,11 +94,16 @@ lives. Default: `~/hyacine/.env`.
 
 Bump `llm_timeout_seconds` in `./config/config.yaml`. Default 300 is usually
 enough — if you hit this frequently, your fetch window is probably too large.
-The fetch reads at most 10 pages of 100 messages per window, newest first,
-and logs a `fetch_emails hit the 10-page cap` warning when older mail is left
-out (`journalctl --user -u hyacine-run | grep 'page cap'`). `fetch_max_emails`
-is not enforced yet. After a long outage you can shrink the catch-up window
-by moving the watermark (a UTC ISO-8601 timestamp) forward:
+Each run hands the LLM at most the newest `fetch_max_emails` messages of its
+window (default 500). When older mail is left out, the journal gets a
+`WARN: ... older email(s) ... left out of this digest` line and the digest
+says so at the top. Lowering `fetch_max_emails` is the quickest way to shrink
+a slow run. The fetch itself stops at 10 pages of 100 messages and logs a
+`fetch_emails hit the 10-page cap` warning
+(`journalctl --user -u hyacine-run | grep -E 'left out|page cap'`). Omitted
+mail is not picked up later: the watermark still advances. To shrink the
+catch-up window itself after a long outage, move the watermark (a UTC
+ISO-8601 timestamp) forward:
 
 ```bash
 sqlite3 ./data/hyacine.db \

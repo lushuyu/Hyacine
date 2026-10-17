@@ -13,6 +13,16 @@ digest fed back to the model, no retries on transient Graph errors, starter
 rules that never loaded, and failure alerts that were configured but never
 sent.
 
+### Added
+
+- **`interactive_browser` Graph sign-in.** `HYACINE_GRAPH_AUTH_MODE=interactive_browser`
+  uses the authorization-code + PKCE flow on a loopback port
+  (`HYACINE_GRAPH_REDIRECT_PORT`, default 8400), for tenants whose Conditional
+  Access blocks device code (`AADSTS530036`). `scripts/bootstrap_auth.py` gains
+  `--check` (verify without prompting) and `--reset`, and reports success only
+  once Graph issues a token. The scheduled run never starts an interactive
+  login: a dead refresh token fails the run at once.
+
 ### Changed
 
 - **Default model is `claude-opus-5-5`.** One constant,
@@ -30,6 +40,12 @@ sent.
 - **Leaner LLM payload.** Graph message ids and the duplicated sender domain
   are no longer sent to the model, and calendar attendee lists are capped at
   10.
+- **`fetch_max_emails` is enforced.** Each run hands the LLM the newest
+  `fetch_max_emails` emails (default 500). When older mail is left out, the
+  journal logs a warning and the digest is told to say so at the top.
+- **Desktop data lives in the per-user app data dir** instead of the OS temp
+  dir, for config, the run database and the Graph sign-in alike. Existing
+  desktop users set up once more after upgrading.
 - **The run unit retries failed runs.** `hyacine-run.service` gains
   `Restart=on-failure` (15 min apart; 3 starts of any kind per 4 h) and a
   40-minute start timeout. It needs systemd 244 or newer. Installed copies
@@ -97,6 +113,27 @@ sent.
   sanitizer.
 - Wizard backups such as `.env.bak-*`, which hold the OAuth token, are now
   gitignored.
+- **`hyacine init` → update** backs up every file it rewrites (chmod 600) and
+  keeps config keys the wizard doesn't ask about, including `llm_model` and
+  the provider settings. Current values are the prompt defaults.
+- **`doctor.py`** finds `CLAUDE_CODE_OAUTH_TOKEN` in `./.env`, and validates
+  `config.yaml` and `rules.yaml` against the schemas the pipeline uses instead
+  of only parsing the YAML.
+- **Desktop sidecar.** It starts on demand, restarts after a crash, and
+  restarts after a key save or provider switch so new keys take effect without
+  relaunching. Pipeline runs no longer hit the 60 s RPC timeout. Its stdio is
+  UTF-8 on Windows, and `tzdata` ships for Windows' missing zone database.
+  Config edits apply without an app restart.
+- **Desktop keys.** Testing a provider uses only that provider's own stored
+  key, never the active provider's. Re-entering the wizard keeps the saved
+  config, and "Rotate / switch" or "Replace" no longer deletes the stored key
+  before a new one is saved.
+- **Desktop wizard.** The Graph step's "Open browser" works again (the opener
+  capability had no URL scope), and the device sign-in can be restarted
+  right after a cancel. Unused webview permissions are dropped. "Run now"
+  reports failed runs instead of showing success. `config.write` rejects
+  invalid values and unknown timezones, and config, prompt and rules writes
+  are atomic.
 
 ## [1.2.0] — 2026-04-26
 
