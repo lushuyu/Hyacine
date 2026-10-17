@@ -16,8 +16,10 @@ import stat
 import subprocess
 import sys
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import yaml
+from pydantic import ValidationError
 
 _GREEN = "\033[32m"
 _YELLOW = "\033[33m"
@@ -44,6 +46,52 @@ def _file_mode_octal(path: Path) -> str:
 Check = tuple[str, str, str]  # (status, label, detail)
 
 
+def _read_env_file(env_file: Path | None) -> dict[str, str]:
+    """Parse *env_file* with python-dotenv, the parser pydantic-settings uses.
+
+    Only systemd's ``EnvironmentFile=`` exports .env into a process
+    environment, so a check that reads os.environ alone misses values the
+    timer run does get. Empty values count as unset.
+    """
+    if env_file is None or not env_file.is_file():
+        return {}
+    from dotenv import dotenv_values  # noqa: PLC0415
+
+    return {k: v for k, v in dotenv_values(env_file).items() if v}
+
+
+def _one_line(exc: BaseException) -> str:
+    """Collapse a multi-line pydantic / loader error into one detail line."""
+    if isinstance(exc, ValidationError):
+        return "; ".join(
+            f"{'.'.join(str(p) for p in err['loc']) or '(top level)'}: {err['msg']}"
+            for err in exc.errors()
+        )
+    return " ".join(str(exc).split())
+
+
+def _non_cli_provider(config_yaml: Path) -> str:
+    """Return the provider id when config.yaml picks one that doesn't run `claude`.
+
+    Resolves like the pipeline does, so an empty or unknown llm_provider
+    means the claude-code-oauth default and returns "". A config.yaml that
+    doesn't load also returns "" — check_config_yaml reports that.
+    """
+    from hyacine.config import load_yaml_config  # noqa: PLC0415
+    from hyacine.llm.providers import resolve  # noqa: PLC0415
+
+    try:
+        cfg = load_yaml_config(config_yaml)
+    except Exception:
+        return ""
+    provider = resolve(
+        provider_id=cfg.llm_provider,
+        api_format=cfg.llm_api_format,
+        base_url=cfg.llm_base_url,
+    )
+    return "" if provider.api_format == "anthropic_cli" else provider.id
+
+
 def check_env_file(env_file: Path) -> Check:
     label = f".env exists at {env_file} (mode 0600)"
     if not env_file.exists():
@@ -54,14 +102,33 @@ def check_env_file(env_file: Path) -> Check:
     return PASS, label, ""
 
 
-def check_oauth_token(env_file: Path | None = None) -> Check:
+def check_oauth_token(env_file: Path | None = None, non_cli_provider: str = "") -> Check:
     label = "CLAUDE_CODE_OAUTH_TOKEN is set and not a placeholder"
+    if non_cli_provider:
+        return PASS, label, f"Not needed — llm_provider {non_cli_provider!r} doesn't use the claude CLI"
+    target = str(env_file) if env_file is not None else ".env"
     token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "")
+    from_env_file = False
     if not token:
-        target = str(env_file) if env_file is not None else ".env"
+        token = _read_env_file(env_file).get("CLAUDE_CODE_OAUTH_TOKEN", "")
+        from_env_file = bool(token)
+    if not token:
+        # The token is optional: without it `claude` uses its own
+        # `claude login` credentials (see llm.claude_code.build_env).
+        credentials = Path.home() / ".claude" / ".credentials.json"
+        if credentials.exists():
+            return WARN, label, (
+                f"Not set — `claude` will fall back to its `claude login` credentials "
+                f"({credentials}). Add CLAUDE_CODE_OAUTH_TOKEN=... to {target} to pin a token"
+            )
         return FAIL, label, f"Not set — add CLAUDE_CODE_OAUTH_TOKEN=... to {target}"
     if "replace" in token.lower() or token.startswith("sk-") and len(token) < 20:
         return FAIL, label, "Token looks like a placeholder"
+    if from_env_file:
+        return PASS, label, (
+            f"Read from {target}; systemd loads it via EnvironmentFile=. For a manual "
+            f"`python -m hyacine run`, export it first: set -a; . {target}; set +a"
+        )
     return PASS, label, ""
 
 
@@ -77,27 +144,57 @@ def check_conflicting_keys() -> Check:
 
 
 def check_config_yaml(config_yaml: Path) -> Check:
-    label = f"config.yaml exists at {config_yaml}"
+    label = f"config.yaml exists and is valid at {config_yaml}"
     if not config_yaml.exists():
         return FAIL, label, "Missing — run: python -m hyacine init"
+    from hyacine.config import load_yaml_config  # noqa: PLC0415
+
+    # Load it the way the pipeline does: a file that merely parses can still
+    # fail every run in _get_cfg(), or before the first send.
     try:
-        with config_yaml.open(encoding="utf-8") as f:
-            yaml.safe_load(f)
-        return PASS, label, ""
+        cfg = load_yaml_config(config_yaml)
     except yaml.YAMLError as exc:
         return FAIL, label, f"Parse error: {exc}"
+    except ValidationError as exc:
+        hint = ""
+        if any(err["loc"] == ("run_time",) for err in exc.errors()):
+            hint = ' (quote it: run_time: "10:30" — unquoted, YAML reads 10:30 as the number 630)'
+        return FAIL, label, f"Schema error: {_one_line(exc)}{hint}"
+    except TypeError as exc:
+        return FAIL, label, f"Schema error — expected key: value pairs at the top level: {exc}"
+    except (OSError, ValueError) as exc:
+        return FAIL, label, f"Could not load: {_one_line(exc)}"
+    if not cfg.recipient_email.strip():
+        return FAIL, label, "recipient_email is empty — every run aborts before sending"
+    try:
+        ZoneInfo(cfg.timezone)
+    except (KeyError, ValueError, OSError) as exc:
+        return FAIL, label, (
+            f"timezone {cfg.timezone!r} is not a valid IANA zone (e.g. UTC, "
+            f"Asia/Singapore) — every run aborts: {exc}"
+        )
+    return PASS, label, ""
 
 
 def check_rules_yaml(rules_yaml: Path) -> Check:
-    label = f"rules.yaml exists at {rules_yaml}"
+    label = f"rules.yaml exists and is valid at {rules_yaml}"
     if not rules_yaml.exists():
         return FAIL, label, "Missing — run: python -m hyacine init"
+    from hyacine.pipeline.rules import load_rules  # noqa: PLC0415
+
+    # The pipeline uses load_rules() too; when it raises, the run classifies
+    # every email without rules, so one bad entry silently disables them all.
     try:
-        with rules_yaml.open(encoding="utf-8") as f:
-            yaml.safe_load(f)
-        return PASS, label, ""
+        load_rules(rules_yaml)
     except yaml.YAMLError as exc:
         return FAIL, label, f"Parse error: {exc}"
+    except OSError as exc:
+        return FAIL, label, f"Could not read: {exc}"
+    except ValueError as exc:
+        cause = exc.__cause__
+        reason = _one_line(cause if isinstance(cause, ValidationError) else exc)
+        return FAIL, label, f"Schema error — the pipeline will ignore every rule: {reason}"
+    return PASS, label, ""
 
 
 def check_prompt_md(prompt_md: Path) -> Check:
@@ -138,24 +235,38 @@ def check_auth_record(auth_dir: Path) -> Check:
     return PASS, label, ""
 
 
-def check_claude_cli() -> Check:
+def check_claude_cli(env_file: Path | None = None, non_cli_provider: str = "") -> Check:
     label = "`claude` CLI is reachable"
-    claude_path = shutil.which("claude")
-    if not claude_path:
-        return FAIL, label, "Not found in PATH — install Claude Code CLI"
+    if non_cli_provider:
+        return PASS, label, f"Not needed — llm_provider {non_cli_provider!r} doesn't use the claude CLI"
+    from hyacine.llm.claude_code import ClaudeCodeError, resolve_claude_bin  # noqa: PLC0415
+
+    # Resolve like the pipeline: HYACINE_CLAUDE_BIN (the timer run gets it
+    # from .env), then PATH plus ~/.local/bin.
+    env = dict(os.environ)
+    override = _read_env_file(env_file).get("HYACINE_CLAUDE_BIN")
+    if override and not env.get("HYACINE_CLAUDE_BIN"):
+        env["HYACINE_CLAUDE_BIN"] = override
+    try:
+        claude_path = resolve_claude_bin(env)
+    except ClaudeCodeError as exc:
+        return FAIL, label, str(exc)
     try:
         result = subprocess.run(
-            ["claude", "--version"],
+            [claude_path, "--version"],
             capture_output=True,
             text=True,
             timeout=10,
         )
-        version_line = (result.stdout or result.stderr or "").splitlines()[0] if (
-            result.stdout or result.stderr
-        ) else "unknown"
-        return PASS, label, f"version: {version_line}"
     except Exception as exc:
-        return WARN, label, f"Found but failed to run: {exc}"
+        return WARN, label, f"Found at {claude_path} but failed to run: {exc}"
+    output = (result.stdout or result.stderr or "").strip()
+    version_line = output.splitlines()[0] if output else "unknown"
+    if result.returncode != 0:
+        return WARN, label, (
+            f"{claude_path} --version exited {result.returncode}: {version_line}"
+        )
+    return PASS, label, f"version: {version_line} ({claude_path})"
 
 
 def check_systemctl() -> Check:
@@ -185,10 +296,12 @@ def run_checks() -> int:
     # HYACINE_REPO_ROOT), so `python scripts/doctor.py` from any CWD looks
     # at the same file the runtime will actually read.
     env_file = _default_repo_root() / ".env"
+    # The token and CLI checks only apply when the claude CLI does the LLM call.
+    non_cli_provider = _non_cli_provider(settings.config_path)
 
     checks: list[Check] = [
         check_env_file(env_file),
-        check_oauth_token(env_file),
+        check_oauth_token(env_file, non_cli_provider),
         check_conflicting_keys(),
         check_config_yaml(settings.config_path),
         check_rules_yaml(settings.rules_path),
@@ -196,7 +309,7 @@ def run_checks() -> int:
         check_data_dir(settings.db_path.parent),
         check_db(settings.db_path),
         check_auth_record(settings.auth_dir),
-        check_claude_cli(),
+        check_claude_cli(env_file, non_cli_provider),
         check_systemctl(),
     ]
 

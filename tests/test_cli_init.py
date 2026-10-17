@@ -7,17 +7,20 @@ import textwrap
 from pathlib import Path
 
 import pytest
+import yaml
 
 from hyacine.cli.init import (
     _ask,
     _build_config_yaml,
     _build_env_file,
+    _current_value,
     _parse_env_file,
     _render_prompt,
+    _validate_time,
     _validate_tz,
     run_init,
 )
-from hyacine.config import YamlConfig
+from hyacine.config import YamlConfig, load_yaml_config
 from hyacine.llm.providers import DEFAULT_CLAUDE_MODEL
 
 
@@ -141,6 +144,50 @@ def test_build_config_yaml_ignores_env_overrides(monkeypatch: pytest.MonkeyPatch
     data = yaml.safe_load(_build_config_yaml(_config_answers()))
     assert data["llm_model"] == DEFAULT_CLAUDE_MODEL
     assert data["fetch_max_emails"] == YamlConfig.model_fields["fetch_max_emails"].default
+
+
+def test_build_config_yaml_update_keeps_unasked_keys() -> None:
+    existing: dict[str, object] = {
+        "recipient_email": "old@example.com",
+        "timezone": "Asia/Singapore",
+        "run_time": "07:30",
+        "language": "zh-CN",
+        "llm_model": "claude-opus-4-7",
+        "llm_timeout_seconds": 600,
+        "llm_provider": "deepseek-anthropic",
+        "llm_base_url": "https://api.deepseek.com/anthropic",
+        "llm_api_format": "anthropic_http",
+        "identity": {"name": "Alice"},
+        "fetch_max_emails": None,  # null → falls back to the declared default
+    }
+    data = yaml.safe_load(_build_config_yaml(_config_answers(), existing=existing))
+    # The four answered keys are replaced...
+    assert data["recipient_email"] == "alice@example.com"
+    assert data["timezone"] == "UTC"
+    assert data["language"] == "en"
+    # ...everything else survives.
+    assert data["llm_model"] == "claude-opus-4-7"
+    assert data["llm_timeout_seconds"] == 600
+    assert data["llm_provider"] == "deepseek-anthropic"
+    assert data["llm_base_url"] == "https://api.deepseek.com/anthropic"
+    assert data["llm_api_format"] == "anthropic_http"
+    assert data["identity"] == {"name": "Alice"}
+    assert data["fetch_max_emails"] == YamlConfig.model_fields["fetch_max_emails"].default
+    assert existing["recipient_email"] == "old@example.com", "caller's dict must not be mutated"
+
+
+def test_current_value_drops_unusable_defaults() -> None:
+    current: dict[str, object] = {
+        "timezone": "Mars/Base",
+        "run_time": 630,  # unquoted 10:30 in YAML 1.1
+        "language": "zh-CN",
+        "recipient_email": "  ",
+    }
+    assert _current_value(current, "timezone", _validate_tz) is None
+    assert _current_value(current, "run_time", _validate_time) is None
+    assert _current_value(current, "language") == "zh-CN"
+    assert _current_value(current, "recipient_email") is None
+    assert _current_value(None, "language") is None
 
 
 # ---------------------------------------------------------------------------
@@ -271,6 +318,150 @@ def test_update_resolution_preserves_existing_env(
     assert "CLAUDE_CODE_OAUTH_TOKEN=preserved-token" in content
     assert "HYACINE_GRAPH_TENANT_ID=common" in content
     assert "USER_CUSTOM_KEY=keep-this-too" in content
+
+
+_EXISTING_CONFIG = """\
+recipient_email: old@example.com
+timezone: Asia/Singapore
+language: zh-CN
+run_time: '07:30'
+llm_model: claude-opus-4-7
+llm_timeout_seconds: 600
+llm_provider: deepseek-anthropic
+llm_base_url: https://api.deepseek.com/anthropic
+llm_api_format: anthropic_http
+identity:
+  name: Alice
+"""
+_CUSTOM_RULES = (
+    "rules:\n  - name: boss\n    sender_email: boss@example.com\n    category: priority\n"
+)
+_CUSTOM_PROMPT = "Hand-tuned zh-CN prompt.\n"
+
+
+def _setup_existing_install(repo_root: Path) -> dict[str, Path]:
+    _setup_repo(repo_root)
+    files = {
+        "env": repo_root / ".env",
+        "config": repo_root / "config" / "config.yaml",
+        "rules": repo_root / "config" / "rules.yaml",
+        "prompt": repo_root / "prompts" / "hyacine.md",
+    }
+    files["env"].write_text(
+        "CLAUDE_CODE_OAUTH_TOKEN=preserved-token\nUSER_CUSTOM_KEY=keep\n", encoding="utf-8"
+    )
+    files["env"].chmod(0o644)
+    files["config"].write_text(_EXISTING_CONFIG, encoding="utf-8")
+    files["rules"].write_text(_CUSTOM_RULES, encoding="utf-8")
+    files["prompt"].write_text(_CUSTOM_PROMPT, encoding="utf-8")
+    return files
+
+
+def _backups(path: Path) -> list[Path]:
+    return sorted(path.parent.glob(f"{path.name}.bak-*"))
+
+
+def test_update_all_files_backs_up_and_keeps_unasked_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """'u' for every file must not silently reset llm_* / rules / the prompt."""
+    repo_root = tmp_path / "repo"
+    files = _setup_existing_install(repo_root)
+
+    answers = [
+        "u", "u", "u", "u",            # .env, config.yaml, rules.yaml, hyacine.md
+        "Alice", "PM at Acme", "Focus.", "",
+        "Direct reports", "",
+        "a",
+        "new@example.com",             # recipient → replaced
+        "",                            # timezone → keeps Asia/Singapore
+        "",                            # language → keeps zh-CN
+        "10:30",                       # run_time → replaced
+        "common",
+        "", "",
+    ]
+    monkeypatch.setattr("getpass.getpass", lambda _prompt="": "")
+    monkeypatch.setattr(builtins, "input", _answer_sequence(answers))
+
+    rc = run_init(["--repo-root", str(repo_root)])
+    assert rc == 0
+
+    # config.yaml: answered keys updated, everything else kept, still loads.
+    data = yaml.safe_load(files["config"].read_text(encoding="utf-8"))
+    assert data["recipient_email"] == "new@example.com"
+    assert data["timezone"] == "Asia/Singapore"
+    assert data["language"] == "zh-CN"
+    assert data["run_time"] == "10:30"
+    assert data["llm_model"] == "claude-opus-4-7"
+    assert data["llm_timeout_seconds"] == 600
+    assert data["llm_provider"] == "deepseek-anthropic"
+    assert data["llm_base_url"] == "https://api.deepseek.com/anthropic"
+    assert data["llm_api_format"] == "anthropic_http"
+    assert data["identity"] == {"name": "Alice"}
+    assert load_yaml_config(files["config"]).run_time == "10:30"
+    [config_bak] = _backups(files["config"])
+    assert config_bak.read_text(encoding="utf-8") == _EXISTING_CONFIG
+
+    # rules.yaml: the wizard has no rule questions, so it is left alone.
+    assert files["rules"].read_text(encoding="utf-8") == _CUSTOM_RULES
+    assert _backups(files["rules"]) == []
+
+    # prompt: re-rendered from the new answers, old one recoverable.
+    assert "new@example.com" in files["prompt"].read_text(encoding="utf-8")
+    [prompt_bak] = _backups(files["prompt"])
+    assert prompt_bak.read_text(encoding="utf-8") == _CUSTOM_PROMPT
+
+    # .env: merged as before, plus a 0600 backup (it holds the token).
+    env_content = files["env"].read_text(encoding="utf-8")
+    assert "CLAUDE_CODE_OAUTH_TOKEN=preserved-token" in env_content
+    assert "USER_CUSTOM_KEY=keep" in env_content
+    [env_bak] = _backups(files["env"])
+    assert "preserved-token" in env_bak.read_text(encoding="utf-8")
+    assert oct(stat.S_IMODE(env_bak.stat().st_mode))[-3:] == "600"
+
+
+def test_update_unusable_config_falls_back_to_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_root = tmp_path / "repo"
+    _setup_repo(repo_root)
+    config_yaml = repo_root / "config" / "config.yaml"
+    config_yaml.write_text("- not\n- a mapping\n", encoding="utf-8")
+
+    monkeypatch.setattr("getpass.getpass", lambda _prompt="": "")
+    monkeypatch.setattr(builtins, "input", _answer_sequence(["u"] + _minimal_answers()))
+
+    rc = run_init(["--repo-root", str(repo_root)])
+    assert rc == 0
+
+    data = yaml.safe_load(config_yaml.read_text(encoding="utf-8"))
+    assert data["recipient_email"] == "alice@example.com"
+    assert data["llm_model"] == DEFAULT_CLAUDE_MODEL
+    [bak] = _backups(config_yaml)
+    assert bak.read_text(encoding="utf-8") == "- not\n- a mapping\n"
+
+
+def test_update_aborted_mid_wizard_writes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Update-mode backups happen at write time, so Ctrl-C leaves no strays."""
+    repo_root = tmp_path / "repo"
+    files = _setup_existing_install(repo_root)
+    replies = iter(["u", "u", "u", "u", "Alice"])
+
+    def _input(_prompt: str = "") -> str:
+        try:
+            return next(replies)
+        except StopIteration:
+            raise KeyboardInterrupt from None
+
+    monkeypatch.setattr(builtins, "input", _input)
+
+    rc = run_init(["--repo-root", str(repo_root)])
+    assert rc == 1
+    assert files["config"].read_text(encoding="utf-8") == _EXISTING_CONFIG
+    assert files["prompt"].read_text(encoding="utf-8") == _CUSTOM_PROMPT
+    assert list(repo_root.rglob("*.bak-*")) == []
 
 
 # ---------------------------------------------------------------------------

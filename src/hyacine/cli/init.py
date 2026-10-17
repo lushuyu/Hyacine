@@ -8,8 +8,13 @@ Flow:
   3. Idempotency check on each target file (update / backup+overwrite / skip).
   4. Collect answers from the user.
   5. Render prompts/hyacine.md from Jinja2 template.
-  6. Write config.yaml, rules.yaml, and .env (update mode merges .env:
-     blank answers keep existing values, unknown keys are preserved).
+  6. Write config.yaml, rules.yaml, and .env. Update mode backs up each file
+     it rewrites to <name>.bak-<ts> first and keeps what the wizard doesn't
+     ask about: .env is merged (blank answers keep existing values, unknown
+     keys are preserved), config.yaml keeps every key except recipient_email /
+     timezone / language / run_time (whose current values become the prompt
+     defaults), rules.yaml is left untouched, and prompts/hyacine.md is
+     re-rendered from the new answers.
   7. Print summary + next steps.
 """
 from __future__ import annotations
@@ -121,6 +126,23 @@ def _backup_path(p: Path) -> Path:
     return p.with_name(f"{p.name}.bak-{ts}")
 
 
+def _backup(path: Path) -> Path:
+    """Copy *path* to a timestamped sibling and print where it went.
+
+    The copy is chmod 0600: a .env backup holds the OAuth token, and
+    copy2() would otherwise keep a loose mode the wizard is about to fix
+    on the original.
+    """
+    bak = _backup_path(path)
+    shutil.copy2(path, bak)
+    try:
+        bak.chmod(0o600)
+    except OSError:
+        pass
+    print(f"  Backed up {path} → {bak}")
+    return bak
+
+
 def _repo_root() -> Path:
     """Return the directory containing this file's package root (repo root)."""
     return Path(__file__).parent.parent.parent.parent
@@ -138,9 +160,7 @@ RESOLUTION_QUIT = "quit"
 
 def _resolve_existing(path: Path, overwrite: bool) -> str:
     if overwrite:
-        bak = _backup_path(path)
-        shutil.copy2(path, bak)
-        print(f"  Backed up {path} → {bak}")
+        _backup(path)
         return RESOLUTION_OVERWRITE
 
     print(f"\n{_yellow('File exists')}: {path}")
@@ -152,9 +172,7 @@ def _resolve_existing(path: Path, overwrite: bool) -> str:
         if choice == "u":
             return RESOLUTION_UPDATE
         if choice == "b":
-            bak = _backup_path(path)
-            shutil.copy2(path, bak)
-            print(f"  Backed up → {bak}")
+            _backup(path)
             return RESOLUTION_OVERWRITE
         if choice == "s":
             return RESOLUTION_SKIP
@@ -185,7 +203,37 @@ _DEFAULT_CATEGORIES_MD = textwrap.dedent("""\
 # Main wizard
 # ---------------------------------------------------------------------------
 
-def _collect_answers(args: argparse.Namespace) -> dict[str, object]:  # noqa: C901
+def _current_value(
+    current: dict[str, object] | None,
+    key: str,
+    validate: Callable[[str], None] | None = None,
+) -> str | None:
+    """Return config.yaml's existing *key* as a prompt default, if usable.
+
+    A value that fails *validate* is dropped, so a bad hand-edited value
+    can't become a default that the prompt keeps rejecting.
+    """
+    value = (current or {}).get(key)
+    if not isinstance(value, str) or not value.strip():
+        return None
+    if validate is not None:
+        try:
+            validate(value)
+        except ValueError:
+            return None
+    return value
+
+
+def _collect_answers(  # noqa: C901
+    args: argparse.Namespace,
+    current: dict[str, object] | None = None,
+) -> dict[str, object]:
+    """Ask every wizard question.
+
+    *current* is the existing config.yaml in update mode: its recipient,
+    timezone, language and run_time become the defaults, so pressing Enter
+    keeps them instead of resetting to UTC / en / 07:30.
+    """
     print("\n" + "=" * 60)
     print("  hyacine setup wizard")
     print("  Press Ctrl-C to abort at any time.")
@@ -239,10 +287,25 @@ def _collect_answers(args: argparse.Namespace) -> dict[str, object]:  # noqa: C9
             break
         print("  Please enter A or E.")
 
-    answers["email_recipient"] = _ask("Email recipient (where the daily report is sent)")
-    answers["timezone"] = _ask("Timezone (IANA, e.g. America/New_York)", default="UTC", validate=_validate_tz)
-    answers["language"] = _ask("Language (en / zh-CN)", default="en", validate=_validate_language)
-    answers["run_time"] = _ask("Daily run time (HH:MM in your timezone)", default="07:30", validate=_validate_time)
+    answers["email_recipient"] = _ask(
+        "Email recipient (where the daily report is sent)",
+        default=_current_value(current, "recipient_email"),
+    )
+    answers["timezone"] = _ask(
+        "Timezone (IANA, e.g. America/New_York)",
+        default=_current_value(current, "timezone", _validate_tz) or "UTC",
+        validate=_validate_tz,
+    )
+    answers["language"] = _ask(
+        "Language (en / zh-CN)",
+        default=_current_value(current, "language", _validate_language) or "en",
+        validate=_validate_language,
+    )
+    answers["run_time"] = _ask(
+        "Daily run time (HH:MM in your timezone)",
+        default=_current_value(current, "run_time", _validate_time) or "07:30",
+        validate=_validate_time,
+    )
 
     tenant = _ask("Microsoft tenant ID (UUID or 'common')", default="common")
     if tenant != "common" and not _looks_like_uuid(tenant):
@@ -304,22 +367,51 @@ def _render_prompt(answers: dict[str, object], repo_root: Path) -> str:
     )
 
 
-def _build_config_yaml(answers: dict[str, object]) -> str:
-    # Fields the wizard doesn't ask about come from YamlConfig's declared
-    # defaults so the two can't drift apart. model_construct() skips the
-    # BaseSettings env sources — YamlConfig() would let a stray LLM_MODEL
-    # (etc.) in the shell leak into the generated file.
-    defaults = YamlConfig.model_construct()
-    data = {
+_CONFIG_DEFAULTED_KEYS = (
+    "llm_model",
+    "llm_timeout_seconds",
+    "fetch_max_emails",
+    "initial_watermark_lookback_hours",
+)
+
+
+def _load_existing_config(path: Path) -> dict[str, object]:
+    """Read config.yaml for update mode; {} (with a warning) if unusable."""
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        print(_yellow(f"  Warning: could not read {path} ({exc}); its keys won't be kept."))
+        return {}
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        print(_yellow(f"  Warning: {path} is not a key: value mapping; its keys won't be kept."))
+        return {}
+    return {str(k): v for k, v in data.items()}
+
+
+def _build_config_yaml(
+    answers: dict[str, object],
+    existing: dict[str, object] | None = None,
+) -> str:
+    # Update mode starts from the existing file, so keys the wizard doesn't
+    # ask about (llm_model, llm_provider, llm_base_url, llm_api_format,
+    # identity, ...) survive; only the four answered keys are replaced.
+    data: dict[str, object] = dict(existing or {})
+    data.update({
         "recipient_email": answers["email_recipient"],
         "timezone": answers["timezone"],
-        "llm_model": defaults.llm_model,
         "run_time": answers["run_time"],
-        "llm_timeout_seconds": defaults.llm_timeout_seconds,
-        "fetch_max_emails": defaults.fetch_max_emails,
-        "initial_watermark_lookback_hours": defaults.initial_watermark_lookback_hours,
         "language": answers["language"],
-    }
+    })
+    # Missing fields come from YamlConfig's declared defaults so the two
+    # can't drift apart. model_construct() skips the BaseSettings env
+    # sources — YamlConfig() would let a stray LLM_MODEL (etc.) in the
+    # shell leak into the generated file.
+    defaults = YamlConfig.model_construct()
+    for key in _CONFIG_DEFAULTED_KEYS:
+        if data.get(key) is None:
+            data[key] = getattr(defaults, key)
     return yaml.dump(data, default_flow_style=False, allow_unicode=True)
 
 
@@ -449,20 +541,21 @@ def run_init(argv: list[str] | None = None) -> int:  # noqa: C901
         print(_yellow("\nAll files skipped. Nothing written."))
         return 0
 
+    def _is_update(path: Path) -> bool:
+        return resolutions.get(str(path)) == RESOLUTION_UPDATE
+
+    existing_config = _load_existing_config(config_yaml) if _is_update(config_yaml) else None
+
     try:
-        answers = _collect_answers(args)
+        answers = _collect_answers(args, current=existing_config)
     except KeyboardInterrupt:
         print("\n\nAborted.")
         return 1
 
     prompt_content = _render_prompt(answers, repo_root)
-    config_content = _build_config_yaml(answers)
+    config_content = _build_config_yaml(answers, existing=existing_config)
 
-    existing_env = (
-        _parse_env_file(env_file)
-        if resolutions.get(str(env_file)) == RESOLUTION_UPDATE
-        else None
-    )
+    existing_env = _parse_env_file(env_file) if _is_update(env_file) else None
     env_content = _build_env_file(answers, existing=existing_env)
 
     written: list[Path] = []
@@ -470,15 +563,25 @@ def run_init(argv: list[str] | None = None) -> int:  # noqa: C901
     def _should_write(path: Path) -> bool:
         return resolutions.get(str(path), RESOLUTION_OVERWRITE) != RESOLUTION_SKIP
 
+    # Update mode rewrites the prompt, config.yaml and .env, so back each one
+    # up first ('b' and --overwrite already did in _resolve_existing). Doing
+    # it here rather than at the prompt leaves no stray backups on Ctrl-C.
     if _should_write(prompt_md):
+        if _is_update(prompt_md):
+            _backup(prompt_md)
         prompt_md.write_text(prompt_content, encoding="utf-8")
         written.append(prompt_md)
 
     if _should_write(config_yaml):
+        if _is_update(config_yaml):
+            _backup(config_yaml)
         config_yaml.write_text(config_content, encoding="utf-8")
         written.append(config_yaml)
 
-    if _should_write(rules_yaml):
+    if _is_update(rules_yaml):
+        # The wizard asks nothing about rules, so "update" keeps the file.
+        print(f"  Kept {rules_yaml} unchanged (the wizard has no rule questions)")
+    elif _should_write(rules_yaml):
         starter = repo_root / "config" / "rules.starter.yaml"
         if starter.exists():
             shutil.copy2(starter, rules_yaml)
@@ -487,6 +590,8 @@ def run_init(argv: list[str] | None = None) -> int:  # noqa: C901
         written.append(rules_yaml)
 
     if _should_write(env_file):
+        if _is_update(env_file):
+            _backup(env_file)
         env_file.write_text(env_content, encoding="utf-8")
         env_file.chmod(0o600)
         written.append(env_file)
