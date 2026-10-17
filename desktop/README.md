@@ -173,13 +173,14 @@ a key.
   Windows DPAPI, Linux Secret Service. One slot per provider (slug = preset
   id), so a user can keep multiple tokens side-by-side.
 - Secrets never round-trip to the webview; only `has_key: bool` does.
-- The Rust parent reads the active provider's slot on sidecar spawn and
-  exports the value as `CLAUDE_CODE_OAUTH_TOKEN` (for `anthropic_cli`) or
+- The Rust parent reads the active provider's slot on sidecar spawn (and
+  respawns the sidecar after a key or provider change) and exports the value
+  as `CLAUDE_CODE_OAUTH_TOKEN` (for `anthropic_cli`) or
   `HYACINE_LLM_API_KEY` (for the HTTP backends); `ANTHROPIC_API_KEY` and
   `ANTHROPIC_AUTH_TOKEN` are scrubbed before spawn.
-- CSP restricts `connect-src` to `api.anthropic.com`, `graph.microsoft.com`,
-  and `login.microsoftonline.com` for the webview itself; the Python sidecar
-  makes the actual LLM requests and is allowed arbitrary hosts (so custom
+- CSP restricts the webview's `connect-src` to `'self'` and the Tauri IPC
+  origins; the webview makes no external requests. The Python sidecar makes
+  the actual Graph and LLM requests and is allowed arbitrary hosts (so custom
   providers work).
 - Preview iframe is `sandbox=""` so rendered HTML has no privileges.
 - Tracing redacts `sk-ant-…` / `…-oat01-…` / `Bearer …` patterns via the
