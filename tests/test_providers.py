@@ -20,7 +20,7 @@ import pytest
 import yaml
 
 from hyacine.config import YamlConfig
-from hyacine.ipc.handlers import connectivity_h, providers_h
+from hyacine.ipc.handlers import providers_h
 from hyacine.llm.providers import DEFAULT_CLAUDE_MODEL, by_id, default_provider, resolve
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -240,26 +240,133 @@ def test_http_probe_defaults_model(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 # ---------------------------------------------------------------------------
-# connectivity.claude fallback
+# providers.test key fallback: HYACINE_LLM_API_KEY only for the active endpoint
 # ---------------------------------------------------------------------------
 
-def test_connectivity_default_model_when_config_blank(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(connectivity_h, "load_yaml_config", lambda _p: YamlConfig(llm_model=""))
-    assert connectivity_h._default_claude_model() == DEFAULT_CLAUDE_MODEL
+_ACTIVE_KEY = "sk-ant-api03-ACTIVE-CONSOLE-KEY"
 
 
-def test_connectivity_default_model_when_config_unreadable(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.fixture
+def active_console(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Sidecar state the Rust parent leaves behind when Anthropic Console is
+    active: config.yaml names it and HYACINE_LLM_API_KEY holds its key."""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("llm_provider: anthropic-console\n", encoding="utf-8")
+    monkeypatch.setenv("HYACINE_CONFIG_PATH", str(cfg))
+    # YamlConfig also reads these from the environment.
+    for var in ("LLM_PROVIDER", "LLM_API_FORMAT", "LLM_BASE_URL", "LLM_MODEL"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    monkeypatch.setenv("HYACINE_LLM_API_KEY", _ACTIVE_KEY)
+    return cfg
+
+
+def _capture_post(calls: list[dict[str, Any]]) -> Any:
+    def _post(url: str, **kwargs: Any) -> httpx.Response:
+        calls.append({"url": url, **kwargs})
+        return httpx.Response(200, json={})
+
+    return _post
+
+
+def test_stored_key_is_used_for_the_active_provider(
+    active_console: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def _boom(_p: Path) -> YamlConfig:
-        raise OSError("unreadable")
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(providers_h.httpx, "post", _capture_post(calls))
 
-    monkeypatch.setattr(connectivity_h, "load_yaml_config", _boom)
-    assert connectivity_h._default_claude_model() == DEFAULT_CLAUDE_MODEL
+    res = providers_h.test(provider_id="anthropic-console")
+
+    assert res["status"] == "ok"
+    assert calls[0]["url"] == "https://api.anthropic.com/v1/messages"
+    assert calls[0]["headers"]["x-api-key"] == _ACTIVE_KEY
 
 
-def test_connectivity_prefers_configured_model(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_active_key_is_not_sent_to_another_vendor(
+    active_console: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(providers_h.httpx, "post", _capture_post(calls))
+
+    res = providers_h.test(provider_id="deepseek-anthropic")
+
+    assert res["status"] == "fail"
+    assert "requires an api_key" in res["detail"]
+    assert "active provider" in res["detail"]
+    assert calls == []
+
+
+def test_active_key_is_not_sent_to_a_local_server(
+    active_console: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(providers_h.httpx, "post", _capture_post(calls))
+
+    res = providers_h.test(provider_id="ollama-local")
+
+    assert res["status"] == "ok"
+    assert calls[0]["url"] == "http://localhost:11434/v1/chat/completions"
+    assert "authorization" not in calls[0]["headers"]
+
+
+def test_active_key_never_becomes_the_cli_oauth_token(
+    active_console: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """It would override the user's `claude login` and fail the probe."""
+    calls: list[dict[str, Any]] = []
     monkeypatch.setattr(
-        connectivity_h, "load_yaml_config", lambda _p: YamlConfig(llm_model="claude-haiku-5-5")
+        "hyacine.llm.claude_code.resolve_claude_bin", lambda _env: "/usr/bin/claude"
     )
-    assert connectivity_h._default_claude_model() == "claude-haiku-5-5"
+    monkeypatch.setattr(providers_h.subprocess, "run", _fake_cli_run(calls))
+
+    res = providers_h.test(provider_id="claude-code-oauth")
+
+    assert res["status"] == "ok"
+    assert "CLAUDE_CODE_OAUTH_TOKEN" not in calls[0]["env"]
+
+
+def test_explicit_key_is_always_used(
+    active_console: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(providers_h.httpx, "post", _capture_post(calls))
+
+    res = providers_h.test(provider_id="deepseek-anthropic", api_key="sk-deepseek")
+
+    assert res["status"] == "ok"
+    assert calls[0]["url"] == "https://api.deepseek.com/anthropic/v1/messages"
+    assert calls[0]["headers"]["x-api-key"] == "sk-deepseek"
+
+
+def test_custom_endpoint_gets_the_key_only_at_the_configured_url(
+    active_console: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    active_console.write_text(
+        "llm_provider: ''\n"
+        "llm_api_format: openai_chat\n"
+        "llm_base_url: https://llm.example.com/v1\n",
+        encoding="utf-8",
+    )
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(providers_h.httpx, "post", _capture_post(calls))
+
+    same = providers_h.test(api_format="openai_chat", base_url="https://llm.example.com/v1/")
+    other = providers_h.test(api_format="openai_chat", base_url="https://other.example.net/v1")
+
+    assert same["status"] == "ok"
+    assert calls[0]["headers"]["authorization"] == f"Bearer {_ACTIVE_KEY}"
+    assert other["status"] == "fail"
+    assert len(calls) == 1
+
+
+def test_unreadable_config_means_no_fallback(
+    active_console: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    active_console.write_text("llm_timeout_seconds: soon\n", encoding="utf-8")
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(providers_h.httpx, "post", _capture_post(calls))
+
+    res = providers_h.test(provider_id="anthropic-console")
+
+    assert res["status"] == "fail"
+    assert calls == []

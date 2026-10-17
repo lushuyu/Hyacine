@@ -65,6 +65,22 @@ def _inject_claude_code_oauth() -> None:
         os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = from_env
 
 
+def _forget_cached_config() -> None:
+    """Make the next ``run_pipeline`` re-read Settings and config.yaml.
+
+    ``hyacine.pipeline.run`` caches both in module globals for the life of
+    the process. That suits the one-shot CLI/systemd run, but the sidecar
+    lives for the whole app session, so a model, language, recipient or
+    timezone saved through ``config.write`` would otherwise be ignored until
+    the app restarts (while the preview footer, which reloads the config,
+    claimed the new model).
+    """
+    import hyacine.pipeline.run as run_module  # noqa: PLC0415
+
+    run_module._settings = None
+    run_module._cfg = None
+
+
 def dry_run(
     *,
     emit: Callable[[str, Any], None],
@@ -84,6 +100,7 @@ def dry_run(
         from hyacine.pipeline.run import run_pipeline  # noqa: PLC0415
     except ImportError:
         return _mock_dry_run(emit, started)
+    _forget_cached_config()
 
     # Event-driven stage UI — `run_pipeline` invokes this callback at each
     # real boundary (running → ok/fail) so the wizard animates in lockstep
@@ -124,6 +141,7 @@ def run(
         from hyacine.pipeline.run import run_pipeline  # noqa: PLC0415
     except ImportError as e:
         return {"ok": False, "error": str(e), "duration_ms": 0}
+    _forget_cached_config()
 
     def progress(stage: str, status: str) -> None:
         _emit_stage(emit, stage, status)
