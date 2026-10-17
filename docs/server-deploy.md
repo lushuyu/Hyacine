@@ -61,6 +61,9 @@ enough for a daily cadence.
 The unit files live in `src/hyacine/ops/systemd/`. They assume the repo is at
 `~/hyacine`; if yours lives elsewhere, edit `WorkingDirectory=`,
 `EnvironmentFile=`, `ExecStart=`, and `ReadWritePaths=` after copying.
+The timer fires at 07:30 host time: edit `OnCalendar=` in
+`~/.config/systemd/user/hyacine-run.timer` to match your `run_time`, adding
+your zone if the host's differs (e.g. `OnCalendar=*-*-* 07:30:00 Asia/Singapore`).
 
 ```bash
 mkdir -p ~/.config/systemd/user
@@ -142,9 +145,10 @@ Your personal state (`./.env`, `./config/*.yaml`, `./prompts/hyacine.md`,
 `./data/`) is gitignored and untouched by `git pull`.
 
 If you carry local edits to tracked source files, `git pull` refuses to run
-when a release changes the same files. Commit the edits on a local branch and
-update with `git pull --rebase`, or `git stash push`, `git pull`, then
-`git stash apply` and check `git diff` before dropping the stash.
+when a release changes the same files. Commit them on your local `main` and
+update with `git pull --rebase` (from another branch, `git pull --rebase
+origin main`), or run `git stash push`, `git pull`, then `git stash apply`
+and check `git diff` before dropping the stash.
 
 ## 7. Backups
 

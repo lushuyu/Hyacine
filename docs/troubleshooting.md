@@ -178,6 +178,10 @@ budget. Raise it with `HYACINE_LLM_MAX_TOKENS` in `./.env` (keep the
 provider's own maximum in mind; DeepSeek rejects values above 8192), raise
 `llm_timeout_seconds` to match, or lower `HYACINE_CLAUDE_EFFORT`.
 
+If the error says `stop_reason=model_context_window_exceeded`, the *input*
+filled the context window and a bigger output budget won't help: shrink the
+window by moving the watermark forward (see `claude subprocess timed out`).
+
 `model refused` is a safety-classifier decline (`stop_reason: refusal`); the
 error names the category. On the Anthropic Console, Claude Opus 5 / 5.5,
 Fable 5.1 and Sonnet 5.5 requests opt into the server-side fallback, so most
@@ -291,8 +295,8 @@ Two limits apply to those retries:
   resets the counter first; from a shell, run
   `systemctl --user reset-failed hyacine-run.service`.
 - **Exit status 3 is never retried.** The run exits 3 when `sendMail` failed
-  in a way that doesn't rule out delivery (a read timeout, or HTTP 500, 502 or
-  504), or when the digest was sent but the run couldn't be recorded. Retrying
+  in a way that doesn't rule out delivery (a read timeout, HTTP 500/502/504,
+  or a SIGTERM mid-send), or when the digest was sent but the run couldn't be recorded. Retrying
   could mail a second digest, so check your inbox and start the run by hand
   if nothing arrived.
 

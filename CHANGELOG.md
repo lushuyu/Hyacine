@@ -35,9 +35,10 @@ sent.
   40-minute start timeout. It needs systemd 244 or newer. Installed copies
   must be updated by hand.
 - **Exit status 3 means "don't retry".** A run exits 3 when `sendMail` failed
-  in a way that doesn't rule out delivery (a read timeout, or HTTP 500, 502 or
-  504), or when the digest went out but the run couldn't be recorded. The unit
-  sets `RestartPreventExitStatus=3`, so a retry never mails a second digest.
+  in a way that doesn't rule out delivery (a read timeout, HTTP 500/502/504,
+  or a SIGTERM mid-send), or when the digest went out but the run
+  couldn't be recorded. The unit sets `RestartPreventExitStatus=3`, so those
+  runs aren't retried into a second digest.
   A run stopped by SIGTERM (e.g. the start timeout) now marks itself failed
   and alerts instead of staying "running".
 - **Configurable output budget for HTTP providers.** `HYACINE_LLM_MAX_TOKENS`
@@ -78,8 +79,9 @@ sent.
   If yours is an unmodified copy, replace it with the new
   `config/rules.starter.yaml`; otherwise apply the same edits by hand.
 - **Failure alerts.** `HYACINE_NTFY_TOPIC` alerts now fire when a systemd or
-  CLI run fails, carrying the full exception message, and a crash prints its
-  traceback to the journal.
+  CLI run fails. Each carries a one-line summary of the final exception (the
+  whole message, not just its last line, capped at 200 characters), and a
+  crash prints its traceback to the journal.
 - **"Run now" started two pipelines.** It now uses
   `systemctl start --no-block` and never falls back to a second
   unsupervised run on timeout. It also resets the unit's start limit first,
