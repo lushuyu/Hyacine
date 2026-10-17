@@ -77,6 +77,12 @@ class Provider:
     Empty tuple means "free-form text input"."""
 
 
+DEFAULT_CLAUDE_MODEL = "claude-opus-5-5"
+"""Default Claude model id, shared by the CLI and Messages API presets and by
+every fallback that needs "some Claude model". The `claude` CLI accepts full
+ids as well as aliases, so one string works for both wire formats."""
+
+
 # ── Built-in presets ───────────────────────────────────────────────────────
 # Not exhaustive — we pick one representative per category so the wizard has
 # sensible defaults. Users add more via the custom-provider editor.
@@ -284,6 +290,7 @@ def as_dicts() -> list[dict[str, object]]:
 __all__ = [
     "ApiFormat",
     "Category",
+    "DEFAULT_CLAUDE_MODEL",
     "Provider",
     "BUILTIN_PRESETS",
     "by_id",
