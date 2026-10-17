@@ -20,7 +20,8 @@ sent.
   (`HYACINE_GRAPH_REDIRECT_PORT`, default 8400), for tenants whose Conditional
   Access blocks device code (`AADSTS530036`). `scripts/bootstrap_auth.py` gains
   `--check` (verify without prompting) and `--reset`, and reports success only
-  once Graph issues a token. The scheduled run never starts an interactive
+  once the cached refresh token is actually redeemed, not merely when a
+  cached access token answers. The scheduled run never starts an interactive
   login: a dead refresh token fails the run at once.
 
 ### Changed
@@ -115,23 +116,30 @@ sent.
   gitignored.
 - **`hyacine init` → update** backs up every file it rewrites (chmod 600) and
   keeps config keys the wizard doesn't ask about, including `llm_model` and
-  the provider settings. Current values are the prompt defaults.
-- **`doctor.py`** finds `CLAUDE_CODE_OAUTH_TOKEN` in `./.env`, and validates
-  `config.yaml` and `rules.yaml` against the schemas the pipeline uses instead
-  of only parsing the YAML.
+  the provider settings. Current values, the Graph tenant included, are the
+  prompt defaults.
+- **`doctor.py`** checks the `./.env` values the systemd timer actually uses
+  (and flags a different or placeholder shell export), checks
+  `HYACINE_LLM_API_KEY` for HTTP providers, honours `HYACINE_AUTH_RECORD_PATH`,
+  and validates `config.yaml` and `rules.yaml` against the schemas the
+  pipeline uses instead of only parsing the YAML.
+- **`scripts/test_sendmail.py`** uses the configured Graph auth mode and never
+  starts an interactive login; a dead sign-in fails before the send prompt.
 - **Desktop sidecar.** It starts on demand, restarts after a crash, and
   restarts after a key save or provider switch so new keys take effect without
   relaunching. Pipeline runs no longer hit the 60 s RPC timeout. Its stdio is
   UTF-8 on Windows, and `tzdata` ships for Windows' missing zone database.
   Config edits apply without an app restart.
 - **Desktop keys.** Testing a provider uses only that provider's own stored
-  key, never the active provider's. Re-entering the wizard keeps the saved
+  key, and only at the endpoint it was saved for (a changed custom base URL
+  needs the key re-entered); never the active provider's. Re-entering the wizard keeps the saved
   config, and "Rotate / switch" or "Replace" no longer deletes the stored key
   before a new one is saved.
 - **Desktop wizard.** The Graph step's "Open browser" works again (the opener
   capability had no URL scope), and the device sign-in can be restarted
   right after a cancel. Unused webview permissions are dropped. "Run now"
-  reports failed runs instead of showing success. `config.write` rejects
+  reports failed runs with their error instead of showing success, and warns
+  to check the inbox before re-running when the send outcome is unknown. `config.write` rejects
   invalid values and unknown timezones, and config, prompt and rules writes
   are atomic.
 
