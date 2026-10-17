@@ -9,6 +9,9 @@
  */
 import type { ProviderPreset } from './ipc';
 
+/** Mirror of hyacine.llm.providers.DEFAULT_CLAUDE_MODEL. */
+export const DEFAULT_CLAUDE_MODEL = 'claude-opus-5-5';
+
 export const FALLBACK_PRESETS: ProviderPreset[] = [
   {
     id: 'claude-code-oauth',
@@ -16,12 +19,19 @@ export const FALLBACK_PRESETS: ProviderPreset[] = [
     category: 'official',
     api_format: 'anthropic_cli',
     base_url: '',
-    default_model: 'sonnet',
+    default_model: DEFAULT_CLAUDE_MODEL,
     secret_slug: 'claude-code-oauth',
     docs_url: 'https://docs.anthropic.com/en/docs/claude-code',
     icon_color: '#8b5cf6',
     notes: 'Uses the `claude` CLI under the hood.',
-    models: ['sonnet', 'opus', 'haiku']
+    models: [
+      DEFAULT_CLAUDE_MODEL,
+      'claude-sonnet-5-5',
+      'claude-haiku-5-5',
+      'opus',
+      'sonnet',
+      'haiku'
+    ]
   },
   {
     id: 'anthropic-console',
@@ -29,12 +39,12 @@ export const FALLBACK_PRESETS: ProviderPreset[] = [
     category: 'official',
     api_format: 'anthropic_http',
     base_url: 'https://api.anthropic.com',
-    default_model: 'claude-sonnet-4-5',
+    default_model: DEFAULT_CLAUDE_MODEL,
     secret_slug: 'anthropic-console',
     docs_url: 'https://console.anthropic.com/settings/keys',
     icon_color: '#8b5cf6',
     notes: '',
-    models: ['claude-sonnet-4-5', 'claude-haiku-4-5', 'claude-opus-4-5']
+    models: [DEFAULT_CLAUDE_MODEL, 'claude-sonnet-5-5', 'claude-haiku-5-5']
   },
   {
     id: 'deepseek-anthropic',

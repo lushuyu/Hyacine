@@ -1,16 +1,26 @@
 # config/rules.starter.yaml
-# Generic starter rules — copy to ~/.config/hyacine/rules.yaml and customise.
-# Or run `python -m hyacine init` which copies this file automatically.
+# Generic starter rules — copy to config/rules.yaml (or $HYACINE_RULES_PATH)
+# and customise. Or run `python -m hyacine init` which copies this file
+# automatically.
 #
 # Rules are evaluated top-to-bottom; the FIRST match wins.
-# Each rule must have a `name`, a `category`, and at least one matcher:
-#   sender_domain:  substring match against the lowercased sender email domain
-#   sender_email:   exact match (case-insensitive) — supports prefix with "@"
-#   subject_regex:  Python re.search pattern, case-insensitive
+# Each rule needs a `name`, a `category`, and at least one matcher:
+#   sender_domain:  case-insensitive SUBSTRING match against the sender domain
+#                   ("github.com" also matches "noreply.github.com")
+#   sender_email:   case-insensitive SUBSTRING match against the sender address
+#                   ("noreply@" matches any noreply@ sender; even a full address
+#                   such as "bob@example.com" also matches "jbob@example.com")
+#   subject_regex:  Python re.search pattern, case-insensitive; it matches
+#                   anywhere in the subject unless anchored with ^ (use
+#                   \b...\b for whole words). An invalid pattern is
+#                   rejected when the file is loaded
 # A rule with multiple matchers requires ALL matchers to match.
+# An empty matcher ("") counts as unset; a rule with no matchers matches nothing.
 #
-# Built-in categories: advisor | priority | action_required | meeting |
-#   calendar | github | ci | newsletter | marketing | receipt | review | other
+# Categories (any other value fails validation):
+#   priority | action_required | meeting | calendar | github | ci |
+#   newsletter | marketing | receipt | review | advisor | grad_school |
+#   arxiv | scholar | cfp | canvas | admin | other
 
 rules:
   # --- High-priority senders ---
@@ -18,9 +28,10 @@ rules:
     subject_regex: '(urgent|action required|please review|approval needed)'
     category: priority
 
-  - name: priority-direct-report
-    sender_email: ""           # fill in: e.g. manager@example.com
-    category: priority
+  # Uncomment and fill in to pin a specific sender (e.g. your manager):
+  # - name: priority-direct-report
+  #   sender_email: manager@example.com
+  #   category: priority
 
   # --- Action-required ---
   - name: action-required-subject
@@ -28,12 +39,16 @@ rules:
     category: action_required
 
   # --- Meeting invites ---
+  # Not "you're invited" / "join us for": those are webinar and promo phrasing.
+  # "Invitation:" at the start is how Google Calendar invites arrive.
   - name: meeting-invite
-    subject_regex: '(meeting invite|calendar invite|you''re invited|join us for)'
+    subject_regex: '\b(meeting invite|meeting invitation|calendar invite)\b|^\s*invitation\s*:'
     category: meeting
 
+  # Meeting responses and changes ("Accepted: Weekly sync"). Anchored to the
+  # start so "Your card payment was declined" stays out.
   - name: calendar-event
-    subject_regex: '\b(accepted|declined|tentative|updated invitation|cancelled event)\b'
+    subject_regex: '^\s*(accepted|declined|tentative|tentatively accepted|canceled|cancelled|canceled event|cancelled event|updated invitation)\s*:'
     category: calendar
 
   # --- GitHub notifications ---
@@ -51,27 +66,30 @@ rules:
     category: ci
 
   # --- Newsletters & digests ---
+  # Not "weekly update": colleagues use it for real status mail.
   - name: newsletter-subject
-    subject_regex: '(newsletter|weekly digest|monthly digest|weekly update|roundup)'
+    subject_regex: '\b(newsletters?|weekly digest|monthly digest|roundup)\b'
     category: newsletter
 
-  - name: newsletter-unsubscribe
-    subject_regex: 'unsubscribe'
-    category: newsletter
-
-  # --- Marketing ---
-  - name: marketing-noreply
-    sender_email: noreply@
-    category: marketing
-
-  - name: marketing-promo
-    subject_regex: '\b(sale|% off|discount|promo|deal|offer|coupon|limited time)\b'
-    category: marketing
+  # No bare "unsubscribe" rule: "You have unsubscribed from transaction
+  # alerts" is an account-security signal, not a newsletter.
 
   # --- Receipts & billing ---
+  # Before marketing, so a receipt that also advertises a discount stays a receipt.
   - name: receipt-or-invoice
     subject_regex: '\b(receipt|invoice|order confirmation|payment confirmation|billing statement)\b'
     category: receipt
+
+  # --- Marketing ---
+  # No sender-only noreply@ rule: security alerts, banks and universities send
+  # from noreply@ too. To catch noreply promos, pair sender_email with a
+  # promo subject_regex in the same rule.
+  # Not "offer" / "deal": "Offer of Admission", "deal with this". Not a bare
+  # "sale" / "coupon" / "discount" either: "You made a sale", "Sale and
+  # Purchase Agreement", a bond's coupon payment, a student discount check.
+  - name: marketing-promo
+    subject_regex: '\b(flash sale|on sale|sale ends|\d+\s?% off|(promo|coupon|discount) codes?|limited[- ]time|members?[- ]only)\b'
+    category: marketing
 
   # --- Review requests ---
   - name: review-invite

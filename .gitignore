@@ -1,5 +1,9 @@
 .env
 .env.local
+# Any .env variant (e.g. the wizard's .env.bak-<ts>, which holds the OAuth
+# token) except the tracked template.
+.env.*
+!.env.example
 .venv/
 __pycache__/
 *.pyc
@@ -20,6 +24,8 @@ data/
 config/config.yaml
 config/rules.yaml
 prompts/hyacine.md
+# Wizard backups: config/config.yaml.bak-<ts>, prompts/hyacine.md.bak-<ts>, ...
+*.bak-*
 
 .omc/
 .claude/

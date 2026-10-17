@@ -9,6 +9,7 @@ from datetime import datetime
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
+from pydantic_core import to_json
 
 
 class CategoryHint(StrEnum):
@@ -20,6 +21,16 @@ class CategoryHint(StrEnum):
     CANVAS = "canvas"
     ADMIN = "admin"
     NEWSLETTER = "newsletter"
+    # Generic buckets used by config/rules.starter.yaml.
+    PRIORITY = "priority"
+    ACTION_REQUIRED = "action_required"
+    MEETING = "meeting"
+    CALENDAR = "calendar"
+    GITHUB = "github"
+    CI = "ci"
+    MARKETING = "marketing"
+    RECEIPT = "receipt"
+    REVIEW = "review"
     OTHER = "other"
 
 
@@ -73,6 +84,10 @@ class CalendarEvent(BaseModel):
     web_link: str | None = None
 
 
+# Max attendees per event in the LLM payload; the full count is kept alongside.
+LLM_ATTENDEE_CAP = 10
+
+
 class FetchResult(BaseModel):
     """Payload fed into the LLM — represents everything we pulled for one run."""
 
@@ -83,6 +98,32 @@ class FetchResult(BaseModel):
     emails: list[EmailMessage] = Field(default_factory=list)
     calendar_today: list[CalendarEvent] = Field(default_factory=list)
     generated_at: datetime
+
+    def to_llm_json(self) -> str:
+        """Trimmed JSON for the LLM prompt; model_dump_json() stays lossless.
+
+        Drops fields the model never needs: emails[].id and calendar_today[].id
+        (long opaque Graph ids) and emails[].sender_domain (already in
+        sender_email). web_link is kept so custom prompts can cite links.
+        Events with more than LLM_ATTENDEE_CAP attendees keep the first
+        LLM_ATTENDEE_CAP plus an `attendee_count` with the full total.
+
+        Serialised by pydantic, not json.dumps, so CJK text stays raw UTF-8
+        rather than \\uXXXX escapes that multiply the token count.
+        """
+        data = self.model_dump(
+            mode="json",
+            exclude={
+                "emails": {"__all__": {"id", "sender_domain"}},
+                "calendar_today": {"__all__": {"id"}},
+            },
+        )
+        for event in data["calendar_today"]:
+            attendees = event["attendees"]
+            if len(attendees) > LLM_ATTENDEE_CAP:
+                event["attendees"] = attendees[:LLM_ATTENDEE_CAP]
+                event["attendee_count"] = len(attendees)
+        return to_json(data).decode("utf-8")
 
 
 class RunStatus(StrEnum):
@@ -114,6 +155,9 @@ class RunRecord(BaseModel):
     error_traceback: str | None = None
     hc_ping_result: HcPingResult = HcPingResult.SKIPPED
     sent_message_id: str | None = None
+    # Not persisted: set on a FAILED run whose sendMail raised although Graph
+    # may already have accepted it, so a retry could mail a second digest.
+    delivery_uncertain: bool = False
 
 
 class ConfigSnapshot(BaseModel):

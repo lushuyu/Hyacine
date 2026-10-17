@@ -14,6 +14,7 @@ Contract:
 from __future__ import annotations
 
 import os
+import sys
 import traceback
 import zoneinfo
 from collections.abc import Callable
@@ -237,8 +238,11 @@ def run_pipeline(
     ruleset: RuleSet | None = None
     try:
         ruleset = load_rules(settings.rules_path)
-    except Exception:
-        pass
+    except Exception as exc:
+        # Non-fatal: classify without rules, but say why (one line; YAML and
+        # validation errors are multi-line, so collapse the whitespace).
+        reason = " ".join(f"{exc.__class__.__name__}: {exc}".split())
+        print(f"WARN: rules not loaded, classifying without them: {reason}", file=sys.stderr)
 
     for email in emails:
         if ruleset is not None:
@@ -254,7 +258,7 @@ def run_pipeline(
         calendar_today=calendar,
         generated_at=now_utc,
     )
-    json_input = fetch_result.model_dump_json()
+    json_input = fetch_result.to_llm_json()
 
     # Append a language instruction so the output obeys the user's config
     # even when their system prompt doesn't mention a language explicitly.
@@ -357,31 +361,53 @@ def run_pipeline(
     except Exception as exc:
         send_error = exc
         tb = traceback.format_exc()
-        _update_row(
-            status=RunStatus.FAILED,
-            finished_at=datetime.now(UTC),
-            email_count=len(emails),
-            markdown=markdown,
-            error_traceback=tb,
-        )
+        # A SIGTERM that lands mid-POST leaves the outcome as open as a read
+        # timeout does.
+        uncertain = _delivery_uncertain(exc) or isinstance(exc, RunTerminated)
+        if uncertain:
+            # Shown under the traceback on the dashboard's run page.
+            tb += f"{_DELIVERY_UNKNOWN_NOTE}\n"
+        try:
+            _update_row(
+                status=RunStatus.FAILED,
+                finished_at=datetime.now(UTC),
+                email_count=len(emails),
+                markdown=markdown,
+                error_traceback=tb,
+            )
+            failed_record = _load_record()
+        except Exception as record_exc:
+            if not uncertain:
+                raise
+            # Same rule as the success path: a bookkeeping error must not turn
+            # "may have been sent" into a retryable failure.
+            raise DeliveredButNotRecorded(None, outcome_unknown=True) from record_exc
         _p("deliver", "fail")
         try:
             from hyacine.ops.monitoring import ping_healthchecks
             ping_healthchecks(settings.healthchecks_uuid, "fail", tb)
         except Exception:
             pass
-        return _load_record()
+        return failed_record.model_copy(update={"delivery_uncertain": uncertain})
 
     # --- Success path ---
-    advance_watermark(now_utc)
-
-    _update_row(
-        status=RunStatus.SUCCESS,
-        finished_at=datetime.now(UTC),
-        email_count=len(emails),
-        markdown=markdown,
-        sent_message_id=sent_message_id,
-    )
+    # The digest is in the inbox from here on. If recording that fails, raise
+    # a distinct error so main() keeps systemd from re-running (re-sending).
+    watermark_advanced = False
+    try:
+        advance_watermark(now_utc)
+        watermark_advanced = True
+        _update_row(
+            status=RunStatus.SUCCESS,
+            finished_at=datetime.now(UTC),
+            email_count=len(emails),
+            markdown=markdown,
+            sent_message_id=sent_message_id,
+        )
+    except Exception as exc:
+        raise DeliveredButNotRecorded(
+            sent_message_id, watermark_advanced=watermark_advanced
+        ) from exc
     _p("deliver", "ok")
 
     try:
@@ -401,22 +427,178 @@ def _ensure_utc(dt: datetime) -> datetime:
     return dt
 
 
+# Appended to a FAILED run's stored traceback when _delivery_uncertain().
+_DELIVERY_UNKNOWN_NOTE = "delivery outcome unknown: not retrying"
+
+
+def _delivery_uncertain(exc: BaseException) -> bool:
+    """True when sendMail raised but Graph may still have accepted the message.
+
+    Mirrors the POST retry policy in :mod:`hyacine.graph._http`: a 5xx other
+    than 503, or a transport error after the request went out (ReadTimeout,
+    ReadError, RemoteProtocolError, ...), leaves the outcome unknown, and
+    re-running the pipeline could mail a second digest. Everything else is
+    safe to retry: 4xx (incl. 429) and 503 are refusals, connect / pool
+    errors never reached Graph, and token or render errors are raised
+    before the POST.
+    """
+    import httpx
+
+    from hyacine.graph._http import GraphHTTPError
+
+    if isinstance(exc, GraphHTTPError):
+        status = exc.response.status_code
+        return status >= 500 and status != 503
+    if isinstance(exc, httpx.TransportError):
+        return not isinstance(
+            exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
+        )
+    return False
+
+
+def _exception_summary(tb: str) -> str:
+    """One-line ``Class: message`` of the final exception in a traceback.
+
+    The last line alone is not enough: multi-line messages (azure-identity's
+    AADSTS errors, for one) put the useful part first. So take every line
+    after the last ``  File ...`` frame and its indented source / caret
+    lines, whitespace-collapsed. Text without frames is collapsed whole.
+    """
+    lines = tb.strip().splitlines()
+    start = 0
+    for i, line in enumerate(lines):
+        if line.startswith("  File "):
+            start = i + 1
+    while start < len(lines) and lines[start].startswith("    "):
+        start += 1
+    return " ".join(" ".join(lines[start:]).split())
+
+
+def _alert_failure(summary: str) -> None:
+    """Best-effort ntfy alert for a failed run. Never raises.
+
+    ntfy topics are readable by anyone who knows the name, so only a short
+    one-line summary goes out; the full traceback stays in the run row and
+    journald. No-op when HYACINE_NTFY_TOPIC is unset (send_ntfy skips an
+    empty topic).
+    """
+    try:
+        from hyacine.ops.monitoring import send_ntfy
+
+        message = " ".join(summary.split())[:200]  # one line, short
+        send_ntfy(_get_settings().ntfy_topic, message, title="hyacine run failed")
+    except Exception:  # noqa: BLE001
+        pass  # the alert path must never turn a failed run into a crash
+
+
+# Exit status for a failure that must not be retried: the digest may already
+# be in the inbox. hyacine-run.service lists it in RestartPreventExitStatus=.
+EXIT_NO_RETRY = 3
+
+
+class DeliveredButNotRecorded(Exception):
+    """sendMail succeeded (or may have), then recording the run failed.
+
+    Raised from the original error, either after a successful send (advancing
+    the watermark or writing the SUCCESS row failed) or after a send whose
+    outcome is unknown (writing the FAILED row failed; ``outcome_unknown``).
+    main() exits EXIT_NO_RETRY: a retry could mail the same digest again.
+    """
+
+    def __init__(
+        self,
+        sent_message_id: str | None,
+        *,
+        watermark_advanced: bool = False,
+        outcome_unknown: bool = False,
+    ) -> None:
+        self.sent_message_id = sent_message_id
+        self.watermark_advanced = watermark_advanced
+        self.outcome_unknown = outcome_unknown
+        what = (
+            "sendMail outcome unknown"
+            if outcome_unknown
+            else f"digest sent (sent_message_id={sent_message_id})"
+        )
+        super().__init__(
+            f"{what} but the run was not recorded; "
+            f"watermark {'advanced' if watermark_advanced else 'not advanced'}"
+        )
+
+
+class RunTerminated(Exception):
+    """Raised by main()'s SIGTERM handler.
+
+    An ``Exception`` on purpose: the phase handlers in :func:`run_pipeline`
+    catch it like any other failure and mark the run FAILED.
+    """
+
+
+def _on_sigterm(signum: int, frame: object) -> None:
+    raise RunTerminated("terminated by SIGTERM (systemd TimeoutStartSec or stop)")
+
+
 def main() -> int:
-    """CLI entry: `python -m hyacine.pipeline.run` or `python -m hyacine run`."""
+    """CLI entry: `python -m hyacine.pipeline.run` or `python -m hyacine run`.
+
+    Exit status: 0 sent, 1 failed (systemd retries), EXIT_NO_RETRY when the
+    digest may already be in the inbox.
+    """
+    import signal
+
+    # systemd stops a run with SIGTERM (TimeoutStartSec, `systemctl stop`).
+    # Dying on the spot would leave the run row RUNNING forever; raising lets
+    # the phase in progress record it as FAILED and alert. subprocess.run
+    # kills its child (the claude CLI) on the way out.
+    previous_sigterm = signal.signal(signal.SIGTERM, _on_sigterm)
     try:
         record = run_pipeline()
         if record.status == RunStatus.SUCCESS:
             print(f"OK: sent={record.sent_message_id} emails={record.email_count}")
             return 0
-        err_class = "PipelineError"
+        summary = "PipelineError"
         if record.error_traceback:
-            first_line = record.error_traceback.strip().splitlines()[-1]
-            err_class = first_line
-        print(f"FAIL: {err_class}")
+            summary = _exception_summary(record.error_traceback) or summary
+        if record.delivery_uncertain:
+            # The note run_pipeline appended for the dashboard ends the
+            # summary; both lines below say it in their own words.
+            cause = summary.removesuffix(_DELIVERY_UNKNOWN_NOTE).rstrip()
+            print(f"FAIL: {cause} ({_DELIVERY_UNKNOWN_NOTE})")
+            _alert_failure(
+                f"run {record.id} failed: sendMail outcome unknown, not retrying - "
+                f"check the inbox ({cause})"
+            )
+            return EXIT_NO_RETRY
+        print(f"FAIL: {summary}")
+        _alert_failure(f"run {record.id} failed: {summary}")
         return 1
+    except DeliveredButNotRecorded as exc:
+        traceback.print_exc()
+        original = exc.__cause__
+        reason = f"{original.__class__.__name__}: {original}" if original else "unknown error"
+        print(f"FAIL: {exc}: {reason}")
+        state = "advanced" if exc.watermark_advanced else "not advanced"
+        if exc.outcome_unknown:
+            _alert_failure(
+                "sendMail outcome unknown and the run was not recorded, not retrying - "
+                f"check the inbox ({reason})"
+            )
+        else:
+            _alert_failure(
+                f"digest sent but the run was not recorded; watermark {state} ({reason})"
+            )
+        return EXIT_NO_RETRY
     except Exception as exc:
-        print(f"FAIL: {exc.__class__.__name__}")
+        # Full traceback to stderr (journald under systemd); stdout and the
+        # alert get the one-line summary.
+        traceback.print_exc()
+        summary = f"{exc.__class__.__name__}: {exc}"
+        print(f"FAIL: {summary}")
+        _alert_failure(f"run failed: {summary}")
         return 1
+    finally:
+        if previous_sigterm is not None:  # None: set outside Python, can't restore
+            signal.signal(signal.SIGTERM, previous_sigterm)
 
 
 if __name__ == "__main__":

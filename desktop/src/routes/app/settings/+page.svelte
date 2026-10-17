@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import { ipc } from '$lib/ipc';
-  import { formatError } from '$lib/provider-presets';
+  import { FALLBACK_PRESETS, formatError } from '$lib/provider-presets';
   import { pushToast } from '$lib/stores';
   import { setTheme, type Theme } from '$lib/stores';
   import { t } from '$lib/i18n';
@@ -16,6 +16,10 @@
     run_time: string;
     language: 'en' | 'zh-CN';
   } | null>(null);
+  // Model picker choices: the active preset's catalogue plus the saved
+  // model, so opening + saving Settings never silently rewrites it. Empty
+  // means custom / unknown provider / no curated list → free-text input.
+  let modelOptions = $state<string[]>([]);
   let hasKey = $state(false);
   let currentProvider = $state<{ id: string; name: string; secret_slug: string } | null>(null);
   let me = $state<{ signed_in: boolean; display_name?: string; user_principal_name?: string }>({
@@ -36,6 +40,21 @@
       run_time: c.run_time,
       language: (c.language as 'en' | 'zh-CN') ?? 'en'
     };
+    // config.read also returns the provider fields (WizardConfig doesn't
+    // type them). Same rule as the runtime resolve(): a blank llm_provider
+    // means claude-code-oauth unless a custom endpoint is configured.
+    const p = c as typeof c & {
+      llm_provider?: string;
+      llm_api_format?: string;
+      llm_base_url?: string;
+    };
+    const providerId =
+      p.llm_provider || (p.llm_api_format && p.llm_base_url ? 'custom' : 'claude-code-oauth');
+    const models = FALLBACK_PRESETS.find((x) => x.id === providerId)?.models ?? [];
+    modelOptions =
+      models.length && c.llm_model && !models.includes(c.llm_model)
+        ? [c.llm_model, ...models]
+        : models;
     try {
       const cur = await ipc.providers.current();
       currentProvider = cur.current;
@@ -142,11 +161,15 @@
         </div>
         <label class="block">
           <span class="mb-1 block text-xs text-[rgb(var(--fg-muted))]">{$t('settingsClaudeModel')}</span>
-          <select class="input" bind:value={cfg.llm_model}>
-            <option value="sonnet">sonnet</option>
-            <option value="opus">opus</option>
-            <option value="haiku">haiku</option>
-          </select>
+          {#if modelOptions.length}
+            <select class="input" bind:value={cfg.llm_model}>
+              {#each modelOptions as m (m)}
+                <option value={m}>{m}</option>
+              {/each}
+            </select>
+          {:else}
+            <input class="input" bind:value={cfg.llm_model} />
+          {/if}
         </label>
         <div class="flex justify-end">
           <button class="btn-primary" onclick={saveCfg}>{$t('save')}</button>

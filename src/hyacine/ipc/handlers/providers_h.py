@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import tempfile
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -26,7 +27,7 @@ from typing import Any
 import httpx
 
 from hyacine.llm import providers as _providers
-from hyacine.llm.providers import Provider
+from hyacine.llm.providers import DEFAULT_CLAUDE_MODEL, Provider
 
 
 def list_providers() -> dict[str, Any]:
@@ -155,15 +156,26 @@ def _probe_anthropic_cli(*, api_key: str, model: str) -> dict[str, Any]:
 
     Genuine blockers (the ``claude`` binary itself being absent) still fail
     loud; that's what the :func:`resolve_claude_bin` branch below catches.
+
+    The env comes from :func:`build_env` and the child runs from an empty
+    temp dir, as in the daily run, so the probe gets the same API-key
+    scrubbing, safe mode and effort validation and can't pass on a setup
+    the real run would reject.
     """
-    from hyacine.llm.claude_code import resolve_claude_bin  # noqa: PLC0415
+    from hyacine.llm.claude_code import (  # noqa: PLC0415
+        ClaudeCodeError,
+        build_env,
+        resolve_claude_bin,
+    )
 
     start = _now_ms()
-    env = os.environ.copy()
+    base_env = os.environ.copy()
     if api_key.strip():
-        env["CLAUDE_CODE_OAUTH_TOKEN"] = api_key.strip()
-    env.pop("ANTHROPIC_API_KEY", None)
-    env.pop("ANTHROPIC_AUTH_TOKEN", None)
+        base_env["CLAUDE_CODE_OAUTH_TOKEN"] = api_key.strip()
+    try:
+        env = build_env(base_env)
+    except ClaudeCodeError as e:
+        return _fail("providers.test", str(e))
     try:
         bin_path = resolve_claude_bin(env)
     except Exception as e:  # noqa: BLE001
@@ -178,7 +190,7 @@ def _probe_anthropic_cli(*, api_key: str, model: str) -> dict[str, Any]:
         bin_path,
         "-p",
         "--output-format", "text",
-        "--model", model or "sonnet",
+        "--model", model or DEFAULT_CLAUDE_MODEL,
         "--max-turns", "1",
         "--tools", "",
         "--permission-mode", "default",
@@ -186,18 +198,33 @@ def _probe_anthropic_cli(*, api_key: str, model: str) -> dict[str, Any]:
         "Reply with the single word 'pong'.",
     ]
     try:
-        completed = subprocess.run(
-            argv,
-            capture_output=True,
-            env=env,
-            timeout=30,
-        )
+        with tempfile.TemporaryDirectory(
+            prefix="hyacine-claude-", ignore_cleanup_errors=True
+        ) as workdir:
+            completed = subprocess.run(
+                argv,
+                # The sidecar's stdin is the JSON-RPC channel. Inheriting it
+                # makes `claude -p` wait on stdin (~3 s) and lets it swallow
+                # RPC frames meant for us.
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                env=env,
+                cwd=workdir,
+                timeout=30,
+            )
     except subprocess.TimeoutExpired:
         return {
             "kind": "providers.test",
             "status": "fail",
             "latency_ms": _now_ms() - start,
             "detail": "timed out after 30s",
+        }
+    except OSError as e:
+        return {
+            "kind": "providers.test",
+            "status": "fail",
+            "latency_ms": _now_ms() - start,
+            "detail": f"could not execute `claude` at {bin_path!r}: {e}",
         }
     latency = _now_ms() - start
     if completed.returncode != 0:
@@ -222,7 +249,7 @@ def _probe_anthropic_http(base_url: str, api_key: str, model: str) -> dict[str, 
     start = _now_ms()
     url = base_url.rstrip("/") + "/v1/messages"
     body = {
-        "model": model or "claude-haiku-4-5",
+        "model": model or DEFAULT_CLAUDE_MODEL,
         "max_tokens": 1,
         "messages": [{"role": "user", "content": "ping"}],
     }

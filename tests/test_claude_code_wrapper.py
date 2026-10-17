@@ -1,6 +1,7 @@
 """Tests for hyacine.llm.claude_code subprocess wrapper."""
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -79,6 +80,39 @@ class TestBuildEnv:
         assert "ANTHROPIC_API_KEY" not in result
         assert "ANTHROPIC_AUTH_TOKEN" not in result
 
+    def test_safe_mode_on_by_default(self) -> None:
+        # Keeps the operator's CLAUDE.md / hooks / plugins / MCP servers out
+        # of the daily run.
+        assert build_env({"PATH": "/usr/bin"})["CLAUDE_CODE_SAFE_MODE"] == "1"
+
+    @pytest.mark.parametrize("value", ["0", "false", "no", "FALSE", " No "])
+    def test_safe_mode_opt_out(self, value: str) -> None:
+        result = build_env({"HYACINE_CLAUDE_SAFE_MODE": value})
+        assert "CLAUDE_CODE_SAFE_MODE" not in result
+
+    @pytest.mark.parametrize("value", ["", "1", "true", "yes"])
+    def test_safe_mode_other_values_keep_it_on(self, value: str) -> None:
+        result = build_env({"HYACINE_CLAUDE_SAFE_MODE": value})
+        assert result["CLAUDE_CODE_SAFE_MODE"] == "1"
+
+    def test_effort_defaults_to_high(self) -> None:
+        assert build_env({})["CLAUDE_CODE_EFFORT_LEVEL"] == "high"
+
+    @pytest.mark.parametrize("value", ["low", "medium", "high", "xhigh", "max", " MAX "])
+    def test_effort_override(self, value: str) -> None:
+        result = build_env({"HYACINE_CLAUDE_EFFORT": value})
+        assert result["CLAUDE_CODE_EFFORT_LEVEL"] == value.strip().lower()
+
+    def test_effort_invalid_raises(self) -> None:
+        with pytest.raises(ClaudeCodeError, match="HYACINE_CLAUDE_EFFORT"):
+            build_env({"HYACINE_CLAUDE_EFFORT": "ultra"})
+
+    def test_explicit_effort_level_wins(self) -> None:
+        result = build_env(
+            {"CLAUDE_CODE_EFFORT_LEVEL": "low", "HYACINE_CLAUDE_EFFORT": "max"}
+        )
+        assert result["CLAUDE_CODE_EFFORT_LEVEL"] == "low"
+
 
 # ---------------------------------------------------------------------------
 # build_argv
@@ -112,9 +146,26 @@ class TestBuildArgv:
         assert argv[idx_perm + 1] == "plan"
         assert "--append-system-prompt-file" in argv
         idx_prompt = argv.index("--append-system-prompt-file")
-        assert argv[idx_prompt + 1] == str(prompt_file)
+        assert argv[idx_prompt + 1] == str(prompt_file.resolve())
         assert "--no-session-persistence" in argv
         assert "Generate the daily report." in argv
+
+    def test_relative_prompt_path_made_absolute(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # summarize() runs claude from a temp dir, so a relative path would
+        # point at nothing there.
+        (tmp_path / "prompt.md").write_text("prompt")
+        monkeypatch.chdir(tmp_path)
+        argv = build_argv(
+            Path("prompt.md"), "msg",
+            model="sonnet",
+            max_turns=3,
+            permission_mode="plan",
+        )
+        value = argv[argv.index("--append-system-prompt-file") + 1]
+        assert Path(value).is_absolute()
+        assert value == str((tmp_path / "prompt.md").resolve())
 
     def test_raises_if_prompt_file_missing(self, tmp_path: Path) -> None:
         missing = tmp_path / "nonexistent.md"
@@ -196,6 +247,34 @@ class TestResolveClaudeBin:
         with pytest.raises(ClaudeCodeError, match="not found"):
             resolve_claude_bin(env)
 
+    def test_relative_override_made_absolute(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # summarize() runs claude from a temp dir, so a relative path would
+        # point at nothing there.
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        bin_path = self._make_fake_claude(bin_dir)
+        monkeypatch.chdir(tmp_path)
+        env = {"HYACINE_CLAUDE_BIN": os.path.join("bin", "claude"), "PATH": "/nope"}
+        found = resolve_claude_bin(env)
+        assert os.path.isabs(found)
+        assert Path(found).resolve() == bin_path.resolve()
+
+    def test_relative_path_entry_made_absolute(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        empty_home = tmp_path / "home"
+        empty_home.mkdir()
+        monkeypatch.setenv("HOME", str(empty_home))
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        bin_path = self._make_fake_claude(bin_dir)
+        monkeypatch.chdir(tmp_path)
+        found = resolve_claude_bin({"PATH": "bin"})
+        assert os.path.isabs(found)
+        assert Path(found).resolve() == bin_path.resolve()
+
 
 # ---------------------------------------------------------------------------
 # summarize
@@ -211,6 +290,141 @@ class TestSummarize:
         stub.write_text("#!/bin/sh\nexit 0\n")
         stub.chmod(0o755)
         monkeypatch.setenv("HYACINE_CLAUDE_BIN", str(stub))
+        # Keep the developer's own shell (possibly itself inside Claude Code)
+        # from leaking into the env assertions below.
+        for var in (
+            "HYACINE_CLAUDE_EFFORT",
+            "HYACINE_CLAUDE_SAFE_MODE",
+            "CLAUDE_CODE_EFFORT_LEVEL",
+            "CLAUDE_CODE_SAFE_MODE",
+        ):
+            monkeypatch.delenv(var, raising=False)
+
+    def test_runs_isolated(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Temp cwd, absolute prompt path, safe mode + pinned effort, no API key."""
+        (tmp_path / "prompt.md").write_text("system prompt")
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-should-not-leak")
+
+        seen: dict[str, object] = {}
+
+        def _fake_run(argv, **kwargs):  # type: ignore[no-untyped-def]
+            cwd = kwargs["cwd"]
+            seen["argv"] = argv
+            seen["cwd"] = cwd
+            seen["cwd_existed"] = Path(cwd).is_dir()
+            seen["cwd_empty"] = not any(Path(cwd).iterdir())
+            seen["env"] = kwargs["env"]
+            done = MagicMock(spec=subprocess.CompletedProcess)
+            done.stdout = b'{"result": "ok", "is_error": false}\n'
+            done.stderr = b""
+            done.returncode = 0
+            return done
+
+        monkeypatch.setattr(subprocess, "run", _fake_run)
+
+        assert summarize("{}", Path("prompt.md")) == "ok"
+
+        cwd = Path(str(seen["cwd"]))
+        assert cwd.name.startswith("hyacine-claude-")
+        assert cwd != tmp_path
+        assert seen["cwd_existed"] and seen["cwd_empty"]
+        assert not cwd.exists(), "temp cwd should be cleaned up"
+
+        argv = seen["argv"]
+        assert isinstance(argv, list)
+        prompt_arg = argv[argv.index("--append-system-prompt-file") + 1]
+        assert prompt_arg == str((tmp_path / "prompt.md").resolve())
+        assert argv[argv.index("--model") + 1] == "claude-opus-5-5"
+
+        env = seen["env"]
+        assert isinstance(env, dict)
+        assert env["CLAUDE_CODE_SAFE_MODE"] == "1"
+        assert env["CLAUDE_CODE_EFFORT_LEVEL"] == "high"
+        assert "ANTHROPIC_API_KEY" not in env
+
+    def test_invalid_effort_raises_before_spawning(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        prompt_file = tmp_path / "prompt.md"
+        prompt_file.write_text("system prompt")
+        monkeypatch.setenv("HYACINE_CLAUDE_EFFORT", "turbo")
+
+        def _fail(*a, **kw):  # type: ignore[no-untyped-def]
+            raise AssertionError("subprocess.run must not be called")
+
+        monkeypatch.setattr(subprocess, "run", _fail)
+        with pytest.raises(ClaudeCodeError, match="HYACINE_CLAUDE_EFFORT"):
+            summarize("{}", prompt_file)
+
+    def test_relative_claude_bin_runs_from_temp_cwd(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Real subprocess: a relative HYACINE_CLAUDE_BIN must still be found
+        once the child's cwd is the temp dir."""
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        stub = bin_dir / "claude"
+        stub.write_text(
+            "#!/bin/sh\n"
+            "cat >/dev/null\n"
+            'printf \'%s\\n\' \'{"result": "stub digest", "is_error": false}\'\n'
+        )
+        stub.chmod(0o755)
+        (tmp_path / "prompt.md").write_text("system prompt")
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("HYACINE_CLAUDE_BIN", os.path.join("bin", "claude"))
+
+        assert summarize("{}", Path("prompt.md")) == "stub digest"
+
+    @pytest.mark.parametrize(
+        "exc",
+        [
+            FileNotFoundError(2, "No such file or directory"),
+            PermissionError(13, "Permission denied"),
+        ],
+    )
+    def test_wraps_oserror_from_spawn(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, exc: OSError
+    ) -> None:
+        """The binary can vanish or lose its exec bit after it was resolved."""
+        prompt_file = tmp_path / "prompt.md"
+        prompt_file.write_text("system prompt")
+        bin_path = os.environ["HYACINE_CLAUDE_BIN"]
+
+        def _raise(*a, **kw):  # type: ignore[no-untyped-def]
+            raise exc
+
+        monkeypatch.setattr(subprocess, "run", _raise)
+        with pytest.raises(ClaudeCodeError, match="could not execute claude") as info:
+            summarize("{}", prompt_file)
+        assert bin_path in str(info.value)
+        assert info.value.__cause__ is exc
+
+    @pytest.mark.parametrize(
+        "stdout",
+        [
+            b'{"result": "", "is_error": false}\n',
+            b'{"result": "  \\n\\t ", "is_error": false}\n',
+            b'{"result": null, "is_error": false}\n',
+            b'[{"type":"system"},{"type":"result","is_error":false,"result":""}]\n',
+        ],
+    )
+    def test_raises_on_empty_result(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stdout: bytes
+    ) -> None:
+        """An empty digest must fail the run, not be mailed."""
+        prompt_file = tmp_path / "prompt.md"
+        prompt_file.write_text("system prompt")
+
+        fake_completed = MagicMock(spec=subprocess.CompletedProcess)
+        fake_completed.stdout = stdout
+        fake_completed.stderr = b""
+        fake_completed.returncode = 0
+
+        monkeypatch.setattr(subprocess, "run", lambda *a, **kw: fake_completed)
+        with pytest.raises(ClaudeCodeError, match="claude returned an empty result"):
+            summarize("{}", prompt_file)
 
     def test_parses_result_field_from_list(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Production path: `claude -p --output-format json` emits a list of events."""

@@ -6,6 +6,14 @@ Critical environment rules (see task brief §1):
   - CLAUDE_CODE_OAUTH_TOKEN is preferred but *optional*: when absent, `claude`
     falls back to its own credential store (populated by `claude login`).
   - Parse stdout JSON `result` field. Do NOT trust exit code (known bug).
+
+Isolation: the server user also runs Claude Code interactively, so the daily
+run must not pick up their setup. ``CLAUDE_CODE_SAFE_MODE=1`` (the env form of
+``--safe-mode``; older CLIs ignore it instead of failing on an unknown flag)
+disables CLAUDE.md, hooks, plugins, MCP servers and output styles while auth,
+model selection and built-in tools keep working. ``CLAUDE_CODE_EFFORT_LEVEL``
+pins effort so it never inherits an interactive ``/effort`` choice, and the
+subprocess runs from an empty temp dir instead of the repo checkout.
 """
 from __future__ import annotations
 
@@ -13,7 +21,14 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
+
+from hyacine.llm.providers import DEFAULT_CLAUDE_MODEL
+
+_EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+_DEFAULT_EFFORT = "high"
+_FALSY = ("0", "false", "no")
 
 
 class ClaudeCodeError(RuntimeError):
@@ -35,10 +50,23 @@ def build_env(base_env: dict[str, str]) -> dict[str, str]:
     The API-key scrubbing is unconditional: those vars override OAuth and
     would silently bill to the Console account instead of using the user's
     Claude Code subscription.
+
+    Safe mode is on unless ``HYACINE_CLAUDE_SAFE_MODE`` is ``0``/``false``/
+    ``no``. Effort comes from ``HYACINE_CLAUDE_EFFORT`` (default ``high``);
+    a ``CLAUDE_CODE_EFFORT_LEVEL`` already in ``base_env`` still wins.
     """
     env = base_env.copy()
     env.pop("ANTHROPIC_API_KEY", None)
     env.pop("ANTHROPIC_AUTH_TOKEN", None)
+    if env.get("HYACINE_CLAUDE_SAFE_MODE", "").strip().lower() not in _FALSY:
+        env["CLAUDE_CODE_SAFE_MODE"] = "1"
+    effort = env.get("HYACINE_CLAUDE_EFFORT", "").strip().lower() or _DEFAULT_EFFORT
+    if effort not in _EFFORT_LEVELS:
+        raise ClaudeCodeError(
+            f"HYACINE_CLAUDE_EFFORT={effort!r} is not one of "
+            f"{', '.join(_EFFORT_LEVELS)}"
+        )
+    env.setdefault("CLAUDE_CODE_EFFORT_LEVEL", effort)
     return env
 
 
@@ -47,7 +75,9 @@ def resolve_claude_bin(env: dict[str, str] | None = None) -> str:
 
     Order: explicit `HYACINE_CLAUDE_BIN` env var, then `shutil.which` against an
     augmented PATH that includes `~/.local/bin` (npm/uv default install dir
-    that systemd user units omit by default).
+    that systemd user units omit by default). Relative results (a relative
+    override or PATH entry) are anchored to the current cwd, since summarize()
+    runs the binary from a temp dir where they would no longer resolve.
     """
     src = env if env is not None else os.environ
     override = src.get("HYACINE_CLAUDE_BIN")
@@ -56,7 +86,7 @@ def resolve_claude_bin(env: dict[str, str] | None = None) -> str:
             raise ClaudeCodeError(
                 f"HYACINE_CLAUDE_BIN={override!r} is not an executable file."
             )
-        return override
+        return os.path.abspath(override)
 
     extra = os.path.expanduser("~/.local/bin")
     path = src.get("PATH", os.defpath)
@@ -68,7 +98,7 @@ def resolve_claude_bin(env: dict[str, str] | None = None) -> str:
             "claude CLI not found on PATH. Install Claude Code or set "
             f"HYACINE_CLAUDE_BIN. Searched PATH={path!r}."
         )
-    return found
+    return os.path.abspath(found)
 
 
 def build_argv(
@@ -95,7 +125,8 @@ def build_argv(
         # tries to invoke ExitPlanMode / Bash / etc. mid-response and burns
         # turns bouncing off permission denials instead of emitting text.
         "--tools", "",
-        "--append-system-prompt-file", str(system_prompt_path),
+        # Absolute: summarize() runs claude from a temp dir, not our cwd.
+        "--append-system-prompt-file", str(system_prompt_path.resolve()),
         "--no-session-persistence",
         user_message,
     ]
@@ -105,7 +136,7 @@ def summarize(
     json_input: str,
     system_prompt_path: Path,
     *,
-    model: str = "sonnet",
+    model: str = DEFAULT_CLAUDE_MODEL,
     max_turns: int = 3,
     permission_mode: str = "default",
     timeout_seconds: int = 300,
@@ -113,8 +144,9 @@ def summarize(
 ) -> str:
     """Run `claude -p` with json_input piped to stdin; return the `result` string.
 
-    Raises ClaudeCodeError on any failure path (timeout, non-JSON output,
-    missing result field, explicit error in JSON).
+    Raises ClaudeCodeError on any failure path (timeout, binary that can't be
+    executed, non-JSON output, missing or empty result field, explicit error
+    in JSON).
     """
     argv = build_argv(
         system_prompt_path,
@@ -126,18 +158,29 @@ def summarize(
     env = build_env(os.environ.copy())
     argv[0] = resolve_claude_bin(env)
 
-    try:
-        completed = subprocess.run(
-            argv,
-            input=json_input.encode(),
-            capture_output=True,
-            env=env,
-            timeout=timeout_seconds,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise ClaudeCodeError(
-            f"claude subprocess timed out after {timeout_seconds}s"
-        ) from exc
+    # A fresh empty cwd keeps the repo checkout (git status, project
+    # CLAUDE.md discovery) out of the session.
+    with tempfile.TemporaryDirectory(
+        prefix="hyacine-claude-", ignore_cleanup_errors=True
+    ) as workdir:
+        try:
+            completed = subprocess.run(
+                argv,
+                input=json_input.encode(),
+                capture_output=True,
+                env=env,
+                cwd=workdir,
+                timeout=timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise ClaudeCodeError(
+                f"claude subprocess timed out after {timeout_seconds}s"
+            ) from exc
+        except OSError as exc:
+            # Resolved a moment ago, so it vanished or lost its exec bit.
+            raise ClaudeCodeError(
+                f"could not execute claude at {argv[0]!r}: {exc}"
+            ) from exc
 
     stdout_text = completed.stdout.decode(errors="replace").strip()
     if not stdout_text:
@@ -184,7 +227,12 @@ def summarize(
             f"claude result event missing 'result' field. keys={list(result_event.keys())}"
         )
 
-    return str(result_event["result"])
+    raw_result = result_event["result"]
+    result = "" if raw_result is None else str(raw_result)
+    # An empty digest would still be mailed; fail the run instead.
+    if not result.strip():
+        raise ClaudeCodeError("claude returned an empty result")
+    return result
 
 
 __all__ = [

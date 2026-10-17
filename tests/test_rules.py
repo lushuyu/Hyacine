@@ -1,11 +1,13 @@
 """Tests for hyacine.pipeline.rules."""
 from __future__ import annotations
 
+import re
 import textwrap
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from hyacine.models import CategoryHint, EmailMessage
 from hyacine.pipeline.rules import (
@@ -15,6 +17,8 @@ from hyacine.pipeline.rules import (
     load_rules,
     validate_rules_yaml,
 )
+
+_REPO_ROOT = Path(__file__).parent.parent
 
 
 def _email(
@@ -106,6 +110,82 @@ class TestRuleMatches:
         )
         email = _email(sender_domain="instructure.com", subject="[Canvas] Assignment due")
         assert rule.matches(email) is True
+
+
+# ---------------------------------------------------------------------------
+# Empty matchers and subject_regex validation
+# ---------------------------------------------------------------------------
+
+class TestEmptyMatchers:
+    @pytest.mark.parametrize("field", ["sender_domain", "sender_email", "subject_regex"])
+    @pytest.mark.parametrize("blank", ["", "   ", "\t\n"])
+    def test_blank_matcher_is_unset(self, field: str, blank: str) -> None:
+        rule = Rule.model_validate({"name": "r", "category": "other", field: blank})
+        assert getattr(rule, field) is None
+        assert rule.matches(_email()) is False
+
+    def test_blank_matcher_does_not_widen_other_matchers(self) -> None:
+        rule = Rule(
+            name="r", category=CategoryHint.GITHUB, sender_domain="github.com", sender_email=""
+        )
+        assert rule.sender_email is None
+        assert rule.matches(_email(sender_domain="github.com")) is True
+        assert rule.matches(_email(sender_domain="example.com")) is False
+
+    def test_blank_placeholder_does_not_swallow_later_rules(self) -> None:
+        # Regression: `sender_email: ""` used to match every email, and first
+        # match wins, so it shadowed every rule below it.
+        ruleset = validate_rules_yaml(textwrap.dedent("""\
+            rules:
+              - name: placeholder
+                sender_email: ""
+                category: priority
+              - name: github
+                sender_domain: github.com
+                category: github
+        """))
+        assert ruleset.classify(_email(sender_domain="github.com")) == CategoryHint.GITHUB
+        assert ruleset.classify(_email()) == CategoryHint.OTHER
+
+
+class TestSubjectRegexValidation:
+    def test_invalid_regex_rejected_by_rule(self) -> None:
+        with pytest.raises(ValidationError, match="invalid subject_regex"):
+            Rule(name="r", category=CategoryHint.OTHER, subject_regex="(unclosed")
+
+    def test_oversized_repeat_rejected(self) -> None:
+        # re.compile raises OverflowError (not re.error) for this one.
+        with pytest.raises(ValidationError, match="invalid subject_regex"):
+            Rule(name="r", category=CategoryHint.OTHER, subject_regex="a{4294967296}")
+
+    def test_invalid_regex_rejected_by_validate_rules_yaml(self) -> None:
+        yaml_text = textwrap.dedent("""\
+            rules:
+              - name: bad
+                category: other
+                subject_regex: '[unterminated'
+        """)
+        with pytest.raises(ValueError, match=r"(?s)Invalid rules schema.*rules.0.subject_regex"):
+            validate_rules_yaml(yaml_text)
+
+    def test_invalid_regex_rejected_by_load_rules(self, tmp_path: Path) -> None:
+        rules_file = tmp_path / "rules.yaml"
+        rules_file.write_text(textwrap.dedent("""\
+            rules:
+              - name: bad
+                category: other
+                subject_regex: '(unclosed'
+        """))
+        with pytest.raises(ValueError, match="Invalid rules YAML"):
+            load_rules(rules_file)
+
+    def test_subject_regex_precompiled_once(self) -> None:
+        rule = Rule(name="r", category=CategoryHint.CFP, subject_regex=r"call for papers")
+        pattern = rule._subject_pattern
+        assert isinstance(pattern, re.Pattern)
+        assert pattern.flags & re.IGNORECASE
+        assert rule.matches(_email(subject="Call For Papers")) is True
+        assert rule._subject_pattern is pattern
 
 
 # ---------------------------------------------------------------------------
@@ -242,6 +322,30 @@ class TestLoadRules:
         with pytest.raises(ValueError, match="Invalid rules YAML"):
             load_rules(rules_file)
 
+    @pytest.mark.parametrize(
+        "rel_path", ["config/rules.starter.yaml", "examples/alice/config/rules.yaml"]
+    )
+    def test_shipped_rules_files_load(self, rel_path: str) -> None:
+        # `hyacine init` copies the starter verbatim; if it fails validation
+        # the pipeline silently skips classification for every new install.
+        ruleset = load_rules(_REPO_ROOT / rel_path)
+        assert ruleset.rules
+        for rule in ruleset.rules:
+            assert rule.sender_domain or rule.sender_email or rule.subject_regex, rule.name
+
+    def test_starter_rules_classify(self) -> None:
+        ruleset = load_rules(_REPO_ROOT / "config" / "rules.starter.yaml")
+        assert ruleset.classify(
+            _email(sender_email="notifications@github.com", sender_domain="github.com")
+        ) == CategoryHint.GITHUB
+        assert ruleset.classify(
+            _email(subject="Action required: renew your badge")
+        ) == CategoryHint.PRIORITY
+        assert ruleset.classify(_email(subject="Deadline for timesheets")) == (
+            CategoryHint.ACTION_REQUIRED
+        )
+        assert ruleset.classify(_email(subject="Lunch on Friday?")) == CategoryHint.OTHER
+
     def test_load_rules_missing_required_field_raises(self, tmp_path: Path) -> None:
         yaml_content = textwrap.dedent("""\
             rules:
@@ -252,6 +356,124 @@ class TestLoadRules:
         rules_file.write_text(yaml_content)
         with pytest.raises(ValueError, match="Invalid rules YAML"):
             load_rules(rules_file)
+
+
+# ---------------------------------------------------------------------------
+# config/rules.starter.yaml — over-broad rule regressions
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def starter() -> RuleSet:
+    return load_rules(_REPO_ROOT / "config" / "rules.starter.yaml")
+
+
+class TestStarterRules:
+    """The digest folds subscription-like hints into its FYI tail, so a starter
+    rule that is too broad hides real mail there."""
+
+    @pytest.mark.parametrize(
+        ("sender_email", "subject", "expected"),
+        [
+            # A sender-only noreply@ match cannot tell marketing from system mail.
+            ("noreply@accounts.example.com", "Security alert: new sign-in on Windows",
+             CategoryHint.OTHER),
+            ("no-reply@bank.example.com", "Your statement is ready", CategoryHint.OTHER),
+            ("noreply@registrar.example.edu", "Enrolment confirmed for Fall 2026",
+             CategoryHint.OTHER),
+            ("admissions@uni.example.edu", "Offer of Admission - MSc Computer Science",
+             CategoryHint.OTHER),
+            ("bob@example.com", "Can you deal with this today?", CategoryHint.OTHER),
+            ("hr@example.com", "Congratulations on your promotion", CategoryHint.OTHER),
+            ("alerts@bank.example.com", "Your card payment was declined", CategoryHint.OTHER),
+            ("bob@example.com", "Weekly update: infra migration", CategoryHint.OTHER),
+            ("events@vendor.example.com", "Join us for our product webinar",
+             CategoryHint.OTHER),
+            ("events@vendor.example.com", "You're invited: an exclusive preview",
+             CategoryHint.OTHER),
+            ("transaction@shop.example.com", "You made a sale on Etsy - ship by Oct 20",
+             CategoryHint.OTHER),
+            ("legal@firm.example.com", "Sale and Purchase Agreement - signing date",
+             CategoryHint.OTHER),
+            ("ops@bank.example.com", "Coupon payment advice - SGS bond", CategoryHint.OTHER),
+            ("it@uni.example.edu", "Your student discount needs to be re-verified",
+             CategoryHint.OTHER),
+            ("alerts@bank.example.com", "You have unsubscribed from transaction alerts",
+             CategoryHint.OTHER),
+        ],
+    )
+    def test_not_over_broad(
+        self, starter: RuleSet, sender_email: str, subject: str, expected: CategoryHint
+    ) -> None:
+        email = _email(
+            sender_email=sender_email,
+            sender_domain=sender_email.split("@", 1)[1],
+            subject=subject,
+        )
+        assert starter.classify(email) == expected
+
+    @pytest.mark.parametrize(
+        "subject",
+        [
+            "Accepted: Weekly sync",
+            "Declined: Weekly sync",
+            "Tentative: Weekly sync",
+            "Canceled: Weekly sync",
+            "Cancelled: Weekly sync",
+            "Updated invitation: Weekly sync @ Mon 10am",
+            "Canceled event: Weekly sync @ Mon 10am",
+        ],
+    )
+    def test_meeting_responses_are_calendar(self, starter: RuleSet, subject: str) -> None:
+        assert starter.classify(_email(subject=subject)) == CategoryHint.CALENDAR
+
+    @pytest.mark.parametrize(
+        "subject", ["Invitation: Design sync @ Tue 3pm", "Meeting invitation: Q3 planning"]
+    )
+    def test_meeting_invites_are_meeting(self, starter: RuleSet, subject: str) -> None:
+        assert starter.classify(_email(subject=subject)) == CategoryHint.MEETING
+
+    @pytest.mark.parametrize(
+        "subject",
+        [
+            "Flash sale: 50% off everything",
+            "Up to 30 % off this weekend",
+            "Your promo code is inside",
+            "Members-only discount",
+            "Limited-time coupon for you",
+        ],
+    )
+    def test_promos_are_marketing(self, starter: RuleSet, subject: str) -> None:
+        email = _email(sender_email="hello@shop.example.com", sender_domain="shop.example.com",
+                       subject=subject)
+        assert starter.classify(email) == CategoryHint.MARKETING
+
+    def test_github_pr_notification_is_github(self, starter: RuleSet) -> None:
+        email = _email(
+            sender_email="notifications@github.com",
+            sender_domain="github.com",
+            subject="Re: [acme/widgets] Fix flaky test (PR #42)",
+        )
+        assert starter.classify(email) == CategoryHint.GITHUB
+
+    @pytest.mark.parametrize(
+        "subject",
+        ["Your receipt from Acme Inc #1234-5678", "Your receipt from Acme - 20% off next time"],
+    )
+    def test_receipt_is_receipt(self, starter: RuleSet, subject: str) -> None:
+        email = _email(sender_email="receipts@stripe.com", sender_domain="stripe.com",
+                       subject=subject)
+        assert starter.classify(email) == CategoryHint.RECEIPT
+
+    def test_newsletter_is_newsletter(self, starter: RuleSet) -> None:
+        assert starter.classify(_email(subject="The weekly newsletter")) == (
+            CategoryHint.NEWSLETTER
+        )
+
+    def test_no_sender_only_noreply_rule(self, starter: RuleSet) -> None:
+        for rule in starter.rules:
+            sender = (rule.sender_email or "").lower()
+            if "noreply" in sender or "no-reply" in sender:
+                assert rule.subject_regex, rule.name
 
 
 # ---------------------------------------------------------------------------

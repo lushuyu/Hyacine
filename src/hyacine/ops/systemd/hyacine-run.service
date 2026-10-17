@@ -5,8 +5,19 @@
 
 [Unit]
 Description=Hyacine pipeline run
-After=network-online.target
-Wants=network-online.target
+# No After=/Wants=network-online.target: a systemd *user* manager has no such
+# target, so those lines did nothing. A network that isn't up yet at start-up
+# is covered by the Restart= retry below.
+# Retry budget: at most 3 starts per 4h, so a hard failure (expired token,
+# broken config) gives up after the first run + 2 retries instead of looping.
+# The budget counts EVERY start of any kind: timer, Restart= retry, manual
+# `systemctl --user start`. Once it is spent, further starts are refused
+# until the window passes or `systemctl --user reset-failed
+# hyacine-run.service` resets it. The web UI's "Run now" runs that
+# reset-failed before starting, so it is never refused and starts a fresh
+# budget of its own.
+StartLimitIntervalSec=4h
+StartLimitBurst=3
 
 [Service]
 Type=oneshot
@@ -18,8 +29,27 @@ EnvironmentFile=%h/hyacine/.env
 # over PATH if the operator wants to point at a non-default location.)
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 UnsetEnvironment=ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN
-# No Restart= on oneshot — the timer's Persistent=true handles missed runs.
 ExecStart=%h/hyacine/.venv/bin/python -m hyacine.pipeline.run
+# The timer's Persistent=true only replays a trigger missed while the host was
+# off; it never retries a run that failed. Restart= does. Retrying is safe:
+# the watermark only advances after a successful send, so a retry re-fetches
+# the same window instead of skipping mail. The exception is exit status 3,
+# below.
+# Restart= on a Type=oneshot unit needs systemd >= 244; older versions refuse
+# to load the unit, so drop Restart=/RestartSec= there.
+Restart=on-failure
+RestartSec=15min
+# Exit 3 (EXIT_NO_RETRY in hyacine.pipeline.run): the digest may already be
+# in the inbox. sendMail raised after Graph may have accepted it (read
+# timeout, HTTP 500/502/504), or the digest went out but the run could not
+# be recorded. A retry could mail a second digest, so the run alerts instead
+# and is not restarted; check the inbox.
+RestartPreventExitStatus=3
+# oneshot units have no start timeout by default; bound a hung run. Hitting
+# it sends SIGTERM: the run marks itself FAILED, alerts, and is retried like
+# any failure. Keep llm_timeout_seconds (config.yaml, default 300) well below
+# this, so a slow LLM fails with its own clear error before systemd steps in.
+TimeoutStartSec=40min
 
 # Same hardening profile as the web unit.
 NoNewPrivileges=true

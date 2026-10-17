@@ -61,6 +61,9 @@ enough for a daily cadence.
 The unit files live in `src/hyacine/ops/systemd/`. They assume the repo is at
 `~/hyacine`; if yours lives elsewhere, edit `WorkingDirectory=`,
 `EnvironmentFile=`, `ExecStart=`, and `ReadWritePaths=` after copying.
+The timer fires at 07:30 host time: edit `OnCalendar=` in
+`~/.config/systemd/user/hyacine-run.timer` to match your `run_time`, adding
+your zone if the host's differs (e.g. `OnCalendar=*-*-* 07:30:00 Asia/Singapore`).
 
 ```bash
 mkdir -p ~/.config/systemd/user
@@ -127,8 +130,25 @@ systemctl --user restart hyacine-web.service
 The timer does not need a restart unless the unit file itself changed. A
 `daemon-reload` is only necessary if you modified unit files.
 
+The installed units are copies. When a release changes the templates in
+`src/hyacine/ops/systemd/`, merge the changes into your copies in
+`~/.config/systemd/user/` (keep your own path edits), then run
+`systemctl --user daemon-reload`. The run unit retries failed runs with
+`Restart=on-failure`, which needs systemd 244 or newer on a `Type=oneshot`
+unit (`systemctl --version`).
+
+To switch models, edit `llm_model` in `./config/config.yaml`; the next run
+picks it up. The default is `claude-opus-5-5`; the `claude` CLI also accepts
+aliases such as `opus` or `sonnet`.
+
 Your personal state (`./.env`, `./config/*.yaml`, `./prompts/hyacine.md`,
 `./data/`) is gitignored and untouched by `git pull`.
+
+If you carry local edits to tracked source files, `git pull` refuses to run
+when a release changes the same files. Commit them on your local `main` and
+update with `git pull --rebase` (from another branch, `git pull --rebase
+origin main`), or run `git stash push`, `git pull`, then `git stash apply`
+and check `git diff` before dropping the stash.
 
 ## 7. Backups
 

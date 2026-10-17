@@ -9,6 +9,7 @@ import httpx
 import markdown as md_lib
 from azure.identity import DeviceCodeCredential
 
+from hyacine.graph._http import raise_for_graph_status, request_with_retry
 from hyacine.graph.email_render import (
     render_email_fragment,
     render_modern_email_html,
@@ -23,18 +24,22 @@ _DANGEROUS_TAG_RE = re.compile(
 
 _GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 
+# No <img>: the digest is built from attacker-controlled mail text, so a
+# prompt-injected email could get the model to emit a remote image whose
+# URL exfiltrates mailbox content as soon as the digest (or the web UI
+# run page) is opened. Nothing legitimate needs it — the logo is inline
+# SVG added by the shell after sanitisation.
 _ALLOWED_TAGS = [
     "p", "h1", "h2", "h3", "h4", "h5", "h6",
     "ul", "ol", "li",
     "strong", "em",
     "a", "blockquote", "code", "pre", "hr", "br",
     "table", "thead", "tbody", "tr", "th", "td",
-    "span", "div", "img",
+    "span", "div",
 ]
 
 _ALLOWED_ATTRS: dict[str, list[str]] = {
     "a": ["href", "title"],
-    "img": ["src", "alt"],
 }
 
 _ALLOWED_PROTOCOLS = ["https", "http", "mailto"]
@@ -128,6 +133,12 @@ def send_email(
     drives the document's ``<html lang>`` attribute. All five are optional;
     the shell falls back to today's date, a generic "your local LLM" chip,
     and ``en`` when missing.
+
+    The POST is retried only where Graph cannot have accepted the message
+    (429/503, connect failures) so a retry never sends the digest twice.
+    A non-2xx answer raises :class:`~hyacine.graph._http.GraphHTTPError`
+    (a ``RuntimeError``) carrying Graph's error body; transport errors
+    propagate as the underlying ``httpx`` exception.
     """
     html_content = render_html_body(
         markdown_body,
@@ -159,16 +170,15 @@ def send_email(
     }
 
     with httpx.Client(timeout=30.0) as client:
-        resp = client.post(
+        resp = request_with_retry(
+            client,
+            "POST",
             f"{_GRAPH_BASE}/me/sendMail",
             headers=headers,
             json=payload,
         )
 
-    if not resp.is_success:
-        raise RuntimeError(
-            f"sendMail failed {resp.status_code}: {resp.text}"
-        )
+    raise_for_graph_status(resp)
 
     request_id = resp.headers.get("request-id") or resp.headers.get("x-ms-request-id")
     return request_id if request_id else f"sendmail-{uuid.uuid4()}"

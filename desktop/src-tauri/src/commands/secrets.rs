@@ -51,10 +51,9 @@ pub async fn secrets_test_claude(api_key: String, model: Option<String>) -> AppR
             detail: "empty key".into(),
         });
     }
-    // "sonnet" matches Hyacine's existing CLI/config default. We avoid
-    // hard-coding a full model identifier here since the messages API
-    // resolves both short ("sonnet") and fully-qualified names.
-    let model = model.unwrap_or_else(|| "sonnet".into());
+    // Mirrors hyacine.llm.providers.DEFAULT_CLAUDE_MODEL. Must be a full
+    // model id: the Messages API rejects `claude` CLI aliases like "sonnet".
+    let model = model.unwrap_or_else(|| "claude-opus-5-5".into());
     let start = std::time::Instant::now();
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))

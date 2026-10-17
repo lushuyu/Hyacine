@@ -61,7 +61,7 @@ You will be asked, one field at a time:
 | Recipient email | `alice@example.com` | Where the daily report is delivered. |
 | Timezone | IANA string | Validated via `zoneinfo`. Default `UTC`. |
 | Language | `en` or `zh-CN` | Controls the rendered prompt's language. |
-| Run time | `HH:MM` | Default `07:30`. Written into the systemd timer later. |
+| Run time | `HH:MM` | Default `07:30`. Not applied to the systemd timer automatically: set `OnCalendar=` in the installed `hyacine-run.timer` to match (see [server-deploy](server-deploy.md)). |
 | Microsoft tenant id | `common` or a GUID | `common` works for any tenant. Override only if your tenant requires a single-tenant app registration. |
 | OAuth token | paste your `claude setup-token` output | Hidden input. Pass `--no-prompt-token` to skip and fill in `.env` by hand later. |
 | ntfy topic | blank or UUID | Create a long random topic name at <https://ntfy.sh>. Do not publish it. |
@@ -159,6 +159,5 @@ live in `./.env`. Keep mode `0600`.
 - **Tenant mismatch (`AADSTS530032` or `AADSTS7000116`)**: your tenant blocks
   device-code flow. Use an `InteractiveBrowserCredential` plus SSH local port
   forwarding — see [troubleshooting.md](troubleshooting.md).
-- **Empty report**: check `fetch_max_emails` in `config.yaml` and confirm the
-  watermark in `./data/hyacine.db` isn't ahead of `now` (happens if the system
-  clock jumped).
+- **Empty report**: confirm the watermark in `./data/hyacine.db` isn't ahead
+  of `now` (happens if the system clock jumped).

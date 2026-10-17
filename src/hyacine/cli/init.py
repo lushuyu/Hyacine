@@ -29,6 +29,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import yaml
 from jinja2 import Environment, FileSystemLoader
 
+from hyacine.config import YamlConfig
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -303,14 +305,19 @@ def _render_prompt(answers: dict[str, object], repo_root: Path) -> str:
 
 
 def _build_config_yaml(answers: dict[str, object]) -> str:
+    # Fields the wizard doesn't ask about come from YamlConfig's declared
+    # defaults so the two can't drift apart. model_construct() skips the
+    # BaseSettings env sources — YamlConfig() would let a stray LLM_MODEL
+    # (etc.) in the shell leak into the generated file.
+    defaults = YamlConfig.model_construct()
     data = {
         "recipient_email": answers["email_recipient"],
         "timezone": answers["timezone"],
-        "llm_model": "sonnet",
+        "llm_model": defaults.llm_model,
         "run_time": answers["run_time"],
-        "llm_timeout_seconds": 300,
-        "fetch_max_emails": 500,
-        "initial_watermark_lookback_hours": 24,
+        "llm_timeout_seconds": defaults.llm_timeout_seconds,
+        "fetch_max_emails": defaults.fetch_max_emails,
+        "initial_watermark_lookback_hours": defaults.initial_watermark_lookback_hours,
         "language": answers["language"],
     }
     return yaml.dump(data, default_flow_style=False, allow_unicode=True)

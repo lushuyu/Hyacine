@@ -37,6 +37,11 @@ ProtectControlGroups=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 RestrictNamespaces=true
 LockPersonality=true
+# W^X stays on: the web UI never runs the LLM in-process. Side effect: when
+# `systemctl --user start` fails, "Run now" falls back to spawning
+# `python -m hyacine.pipeline.run` inside this unit, which inherits W^X and
+# cannot run the claude CLI (SIGTRAP; see hyacine-run.service). So "Run now"
+# relies on systemd starting hyacine-run.service.
 MemoryDenyWriteExecute=true
 SystemCallArchitectures=native
 

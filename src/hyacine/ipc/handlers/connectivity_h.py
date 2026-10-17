@@ -20,6 +20,7 @@ import httpx
 
 from hyacine.config import get_settings, load_yaml_config
 from hyacine.ipc.handlers.graph_h import _get_access_token
+from hyacine.llm.providers import DEFAULT_CLAUDE_MODEL
 
 _HOSTS = ("api.anthropic.com", "graph.microsoft.com")
 
@@ -61,9 +62,9 @@ def _default_claude_model() -> str:
     """Use the model configured by the user, not a hard-coded guess."""
     try:
         cfg = load_yaml_config(get_settings().config_path)
-        return cfg.llm_model or "sonnet"
+        return cfg.llm_model or DEFAULT_CLAUDE_MODEL
     except Exception:  # noqa: BLE001
-        return "sonnet"
+        return DEFAULT_CLAUDE_MODEL
 
 
 def probe_dns(**_: Any) -> dict[str, Any]:

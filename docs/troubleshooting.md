@@ -84,8 +84,20 @@ lives. Default: `~/hyacine/.env`.
 ### `claude subprocess timed out`
 
 Bump `llm_timeout_seconds` in `./config/config.yaml`. Default 300 is usually
-enough — if you hit this frequently, your fetch window is probably too large
-(reduce `fetch_max_emails`).
+enough — if you hit this frequently, your fetch window is probably too large.
+The fetch reads at most 10 pages of 100 messages per window, newest first,
+and logs a `fetch_emails hit the 10-page cap` warning when older mail is left
+out (`journalctl --user -u hyacine-run | grep 'page cap'`). `fetch_max_emails`
+is not enforced yet. After a long outage you can shrink the catch-up window
+by moving the watermark (a UTC ISO-8601 timestamp) forward:
+
+```bash
+sqlite3 ./data/hyacine.db \
+    "UPDATE watermarks SET value='2026-10-17T00:00:00+00:00' WHERE key='last_successful_run_at';"
+```
+
+Keep `llm_timeout_seconds` well below the run unit's `TimeoutStartSec=40min`,
+or systemd stops the run before the LLM call gives up.
 
 ### `claude returned an error`
 
@@ -94,6 +106,24 @@ Inspect the full error dict in the traceback. Common causes:
 - **Daily usage cap hit** on your Claude Code subscription. Wait or upgrade.
 - **Model name invalid**. Check `llm_model` in `config.yaml`.
 - **Token revoked**. Regenerate with `claude setup-token`.
+
+### Tuning the `claude -p` run: effort and safe mode
+
+The CLI provider pins two Claude Code settings through the environment so the
+daily run doesn't depend on how you use Claude Code interactively on the same
+host:
+
+- `CLAUDE_CODE_EFFORT_LEVEL` comes from `HYACINE_CLAUDE_EFFORT` in `./.env`
+  (`low` / `medium` / `high` / `xhigh` / `max`, default `high`). Lower it if
+  runs get slow, raise it if the digest misses nuance. The Anthropic Console
+  provider reads the same variable for current models.
+- `CLAUDE_CODE_SAFE_MODE=1` stops the run from loading your `~/.claude`
+  customizations — CLAUDE.md, hooks, plugins, MCP servers, output styles.
+  Auth and model selection work as usual. Set `HYACINE_CLAUDE_SAFE_MODE=0`
+  only if the run genuinely needs one of those.
+
+The subprocess also runs from an empty temporary directory, so it doesn't pick
+up the checkout's git status or a project-level CLAUDE.md.
 
 ### `FileNotFoundError: 'claude'` under systemd
 
@@ -138,6 +168,24 @@ Provider-side policy rejection. Check that `llm_model` in
 keys only allow Claude models; a DeepSeek relay key won't authenticate
 against `api.anthropic.com`, even though both speak the Claude wire
 format.
+
+### `output truncated` or `model refused`
+
+`output truncated` means the reply hit its output budget: 16000 tokens for
+the Anthropic Console (64000 at effort `xhigh` or `max`) and 4096 for relays
+and OpenAI-compatible endpoints. Opus 5.5's thinking counts toward that
+budget. Raise it with `HYACINE_LLM_MAX_TOKENS` in `./.env` (keep the
+provider's own maximum in mind; DeepSeek rejects values above 8192), raise
+`llm_timeout_seconds` to match, or lower `HYACINE_CLAUDE_EFFORT`.
+
+If the error says `stop_reason=model_context_window_exceeded`, the *input*
+filled the context window and a bigger output budget won't help: shrink the
+window by moving the watermark forward (see `claude subprocess timed out`).
+
+`model refused` is a safety-classifier decline (`stop_reason: refusal`); the
+error names the category. On the Anthropic Console, Claude Opus 5 / 5.5,
+Fable 5.1 and Sonnet 5.5 requests opt into the server-side fallback, so most
+declines are retried on another model before you see this.
 
 ### `Connection refused` hitting a local Ollama / LM Studio
 
@@ -234,7 +282,23 @@ systemctl --user list-timers
 ```
 
 The timer with `Persistent=true` shows the next fire time. If it missed today,
-it fires on the next network-online event.
+it fires as soon as the user manager starts. A run that fails because the
+network isn't up yet (or on any other transient error) is retried by the
+unit's `Restart=on-failure` 15 minutes later. `Restart=` on a `Type=oneshot`
+unit needs systemd 244 or newer.
+
+Two limits apply to those retries:
+
+- **At most 3 starts per 4 hours**, counting every start: timer, retry, or a
+  manual `systemctl --user start`. Past that, systemd logs `Start request
+  repeated too quickly` and refuses further starts. The web UI's "Run now"
+  resets the counter first; from a shell, run
+  `systemctl --user reset-failed hyacine-run.service`.
+- **Exit status 3 is never retried.** The run exits 3 when `sendMail` failed
+  in a way that doesn't rule out delivery (a read timeout, HTTP 500/502/504,
+  or a SIGTERM mid-send), or when the digest was sent but the run couldn't be recorded. Retrying
+  could mail a second digest, so check your inbox and start the run by hand
+  if nothing arrived.
 
 ## Monitoring silent failures
 
