@@ -620,8 +620,10 @@ _LOOPBACK = ["127.0.0.1", "localhost"]
         ),
         pytest.param("https://myhost.ts.net", ["myhost.ts.net", *_LOOPBACK], id="url-no-port"),
         pytest.param(" MyHost.TS.Net ", ["myhost.ts.net", *_LOOPBACK], id="uppercase"),
-        pytest.param("[FE80::1]:8765", ["fe80::1", *_LOOPBACK], id="ipv6-port"),
-        pytest.param("::1", ["::1", *_LOOPBACK], id="ipv6-bare"),
+        # IPv6 literals can never match (Starlette splits Host at the first
+        # ":"), so they are skipped rather than locking the UI to loopback.
+        pytest.param("[FE80::1]:8765, box.ts.net", ["box.ts.net", *_LOOPBACK], id="ipv6-port"),
+        pytest.param("::1", None, id="ipv6-bare-only"),
         pytest.param("*.ts.net:8765", ["*.ts.net", *_LOOPBACK], id="wildcard-port"),
         pytest.param("box:8765, BOX", ["box", *_LOOPBACK], id="dedupe"),
         pytest.param("localhost:8765", ["localhost", "127.0.0.1"], id="loopback-listed"),

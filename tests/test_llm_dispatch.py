@@ -556,8 +556,25 @@ def test_anthropic_http_max_tokens_truncation_hints_at_fix(
     )
     with pytest.raises(anthropic_http.AnthropicHttpError) as exc:
         _call_anthropic(prompt_file, base_url=RELAY, model="m")
+    # No effort is sent to a relay, so lowering it is not offered as a fix.
     assert str(exc.value) == (
         "output truncated (stop_reason=max_tokens); the digest would be incomplete"
+        "; raise HYACINE_LLM_MAX_TOKENS (and llm_timeout_seconds)"
+    )
+
+
+@pytest.mark.usefixtures("_no_effort_env")
+def test_anthropic_http_truncation_suggests_effort_when_it_was_sent(
+    prompt_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _mock_post(
+        monkeypatch,
+        anthropic_http,
+        {"content": [{"type": "text", "text": "half"}], "stop_reason": "max_tokens"},
+    )
+    with pytest.raises(anthropic_http.AnthropicHttpError) as exc:
+        _call_anthropic(prompt_file, base_url="https://api.anthropic.com", model="claude-opus-5-5")
+    assert str(exc.value).endswith(
         "; raise HYACINE_LLM_MAX_TOKENS (and llm_timeout_seconds) "
         "or lower HYACINE_CLAUDE_EFFORT"
     )

@@ -59,10 +59,9 @@ _EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
 # Opus 5.5 defaults to "medium"; the digest is worth the extra thinking.
 _DEFAULT_EFFORT = "high"
 _FALLBACK_BETA = "server-side-fallback-2026-07-01"
-_TRUNCATION_HINT = (
-    "; raise HYACINE_LLM_MAX_TOKENS (and llm_timeout_seconds) "
-    "or lower HYACINE_CLAUDE_EFFORT"
-)
+_TRUNCATION_HINT = "; raise HYACINE_LLM_MAX_TOKENS (and llm_timeout_seconds)"
+# Only suggested when effort was actually sent, i.e. lowering it would help.
+_EFFORT_HINT = " or lower HYACINE_CLAUDE_EFFORT"
 
 
 class AnthropicHttpError(RuntimeError):
@@ -194,12 +193,13 @@ def summarize(
     if stop == "max_tokens":
         raise AnthropicHttpError(
             f"output truncated (stop_reason={stop}); the digest would be "
-            f"incomplete{_TRUNCATION_HINT}"
+            f"incomplete{_TRUNCATION_HINT}{_EFFORT_HINT if effort is not None else ''}"
         )
     if stop == "model_context_window_exceeded":
         # A bigger output budget can't help: the input filled the window.
         raise AnthropicHttpError(
-            f"output truncated (stop_reason={stop}); the digest would be incomplete"
+            f"output truncated (stop_reason={stop}); the digest would be incomplete; "
+            "the input is too large - move the watermark forward to shrink the window"
         )
 
     # Anthropic returns {content: [{type: "text", text: "..."}], ...}. Some

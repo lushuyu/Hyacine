@@ -81,6 +81,15 @@ def _normalise_allowed_host(entry: str) -> str | None:
     if not host:
         logger.warning("Ignoring HYACINE_WEB_ALLOWED_HOSTS entry %r: no hostname", entry.strip())
         return None
+    if ":" in host:
+        # TrustedHostMiddleware splits the Host header at the first ":", so an
+        # IPv6 literal can never match; keeping it would only lock users out.
+        logger.warning(
+            "Ignoring HYACINE_WEB_ALLOWED_HOSTS entry %r: IPv6 literals can't be "
+            "matched; use a hostname",
+            entry.strip(),
+        )
+        return None
     # Same rule TrustedHostMiddleware asserts on.
     if "*" in host[1:] or (host.startswith("*") and host != "*" and not host.startswith("*.")):
         logger.warning(
