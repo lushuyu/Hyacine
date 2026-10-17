@@ -17,14 +17,16 @@ language: en
 llm_model: claude-opus-5-5
 
 # Time of day to send the report (HH:MM in the configured timezone).
-# The systemd timer uses this value — re-run `python -m hyacine init` after changing.
+# The systemd timer is not generated from this value: edit OnCalendar in
+# hyacine-run.timer to match, then `systemctl --user daemon-reload`.
 run_time: "07:30"
 
 # Subprocess timeout for `claude -p` (seconds). Increase for very large mailboxes.
 llm_timeout_seconds: 300
 
-# Soft cap on emails pulled per window. The window is watermark-based so even
-# a backlog stays bounded by this value; raise if you see truncation warnings.
+# Reserved; not enforced yet. Each run reads at most the newest 1000 messages
+# in its watermark window and logs "fetch_emails hit the 10-page cap" when
+# older mail is left out. See docs/troubleshooting.md to shrink a backlog.
 fetch_max_emails: 500
 
 # First-run watermark: if the DB has no last_successful_run_at, pretend the last

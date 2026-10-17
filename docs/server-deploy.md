@@ -141,6 +141,11 @@ aliases such as `opus` or `sonnet`.
 Your personal state (`./.env`, `./config/*.yaml`, `./prompts/hyacine.md`,
 `./data/`) is gitignored and untouched by `git pull`.
 
+If you carry local edits to tracked source files, `git pull` refuses to run
+when a release changes the same files. Commit the edits on a local branch and
+update with `git pull --rebase`, or `git stash push`, `git pull`, then
+`git stash apply` and check `git diff` before dropping the stash.
+
 ## 7. Backups
 
 The SQLite database is small (kilobytes to megabytes). Simple nightly backup:
