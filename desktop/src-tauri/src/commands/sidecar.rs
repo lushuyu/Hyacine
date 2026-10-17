@@ -16,11 +16,14 @@ pub async fn sidecar_stop(state: State<'_, SidecarState>) -> AppResult<()> {
 
 #[tauri::command]
 pub async fn sidecar_rpc(
+    app: AppHandle,
     method: String,
     params: Option<Value>,
     state: State<'_, SidecarState>,
 ) -> AppResult<Value> {
+    // `rpc` starts (or restarts) the sidecar itself, so this works even when
+    // it lands before the layout's `sidecar_start`.
     state
-        .rpc::<Value>(&method, params.unwrap_or(Value::Object(Default::default())))
+        .rpc::<Value>(&app, &method, params.unwrap_or(Value::Object(Default::default())))
         .await
 }

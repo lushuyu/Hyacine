@@ -8,18 +8,28 @@
 //! which reads the value internally and returns only pass/fail + latency.
 
 use serde::Serialize;
+use tauri::State;
 
 use crate::error::{AppError, AppResult};
 use crate::secrets;
+use crate::sidecar::SidecarState;
 
 #[tauri::command]
-pub async fn secrets_set(slug: String, value: String) -> AppResult<()> {
+pub async fn secrets_set(
+    slug: String,
+    value: String,
+    state: State<'_, SidecarState>,
+) -> AppResult<()> {
     // Trim so accidental whitespace doesn't silently break auth later.
     let v = value.trim();
     if v.is_empty() {
         return Err(AppError::Other("empty secret".into()));
     }
-    secrets::set(&slug, v)
+    secrets::set(&slug, v)?;
+    // The sidecar got its key as an env var at spawn; have the next call
+    // respawn it if this changed the key it should hold.
+    state.mark_credentials_stale();
+    Ok(())
 }
 
 #[tauri::command]
@@ -28,8 +38,10 @@ pub async fn secrets_has(slug: String) -> AppResult<bool> {
 }
 
 #[tauri::command]
-pub async fn secrets_remove(slug: String) -> AppResult<()> {
-    secrets::remove(&slug)
+pub async fn secrets_remove(slug: String, state: State<'_, SidecarState>) -> AppResult<()> {
+    secrets::remove(&slug)?;
+    state.mark_credentials_stale();
+    Ok(())
 }
 
 #[derive(Serialize)]

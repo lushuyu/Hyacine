@@ -1,17 +1,27 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default capability grants for the Hyacine desktop app",
+  "description": "Default capability grants for the Hyacine desktop app. The webview only needs core IPC/events and the opener, scoped to the Microsoft device-login pages the Graph step opens and the provider docs links (keep in sync with docs_url in src/hyacine/llm/providers.py; cargo test checks it). The sidecar is spawned from Rust, which capabilities don't gate.",
   "windows": ["main"],
   "permissions": [
     "core:default",
-    "opener:allow-open-url",
-    "shell:allow-spawn",
-    "shell:allow-kill",
-    "shell:allow-stdin-write",
-    "store:default",
-    "dialog:default",
-    "os:default",
-    "process:default"
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        { "url": "https://microsoft.com/devicelogin*" },
+        { "url": "https://www.microsoft.com/devicelogin*" },
+        { "url": "https://login.microsoft.com/device*" },
+        { "url": "https://login.microsoftonline.com/*" },
+        { "url": "https://aka.ms/devicelogin*" },
+        { "url": "https://docs.anthropic.com/*" },
+        { "url": "https://console.anthropic.com/*" },
+        { "url": "https://platform.deepseek.com/*" },
+        { "url": "https://platform.moonshot.cn/*" },
+        { "url": "https://bigmodel.cn/*" },
+        { "url": "https://platform.openai.com/*" },
+        { "url": "https://console.groq.com/*" },
+        { "url": "https://ollama.ai/*" }
+      ]
+    }
   ]
 }

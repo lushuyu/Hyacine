@@ -63,7 +63,11 @@ exe = EXE(
     a.binaries,
     a.zipfiles,
     a.datas,
-    [],
+    # UTF-8 mode. The Rust parent writes raw UTF-8 JSON, but on Windows
+    # Python < 3.15 decodes piped stdin with the ANSI code page, which
+    # crashes or garbles non-ASCII requests (a zh-CN prompt). A frozen
+    # interpreter ignores PYTHONUTF8, so it has to be a bootloader option.
+    [("X utf8", None, "OPTION")],
     name="hyacine-ipc",
     debug=False,
     bootloader_ignore_signals=False,

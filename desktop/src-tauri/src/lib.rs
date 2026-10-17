@@ -37,6 +37,7 @@ pub fn run() {
             commands::secrets::secrets_remove,
             commands::secrets::secrets_test_claude,
             commands::probes::rust_probe_claude,
+            commands::probes::rust_provider_test,
             commands::probes::rust_probe_graph,
             commands::probes::rust_probe_sendmail,
             commands::ui::ui_set_startup,
