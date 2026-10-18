@@ -6,12 +6,16 @@ files.
 """
 from __future__ import annotations
 
+import os
+import shutil
+import zoneinfo
 from pathlib import Path
 from typing import Any
 
 import yaml
+from pydantic import ValidationError
 
-from hyacine.config import get_settings, load_yaml_config
+from hyacine.config import YamlConfig, get_settings, load_yaml_config
 from hyacine.ipc.protocol import INVALID_PARAMS, RpcError
 
 _SAFE_KEYS: set[str] = {
@@ -69,10 +73,65 @@ def write_config(**fields: Any) -> dict[str, Any]:
             raise RpcError(INVALID_PARAMS, f"unknown config key: {k}")
         existing[k] = v
 
-    s.config_path.write_text(
-        yaml.safe_dump(existing, sort_keys=True, allow_unicode=True), encoding="utf-8"
+    _validate_config(existing, check_timezone="timezone" in fields)
+    _atomic_write_text(
+        s.config_path, yaml.safe_dump(existing, sort_keys=True, allow_unicode=True)
     )
     return {"ok": True, "path": str(s.config_path)}
+
+
+def _validate_config(merged: dict[str, Any], *, check_timezone: bool) -> None:
+    """Reject a merged config that the pipeline couldn't use.
+
+    Without this, a wrongly typed value (``llm_timeout_seconds: "10 min"``)
+    made ``load_yaml_config`` raise, which broke ``config.read`` (so the
+    settings page that could fix it wouldn't load) and every run. An
+    unknown timezone (``shanghai``) loaded fine but made every run fail in
+    ``ZoneInfo`` before it recorded anything. The timezone is only checked
+    when this write sets it, so other saves still work if it is already bad.
+    """
+    try:
+        cfg = YamlConfig(**merged)
+    except ValidationError as e:
+        problems = "; ".join(
+            f"{'.'.join(str(p) for p in err['loc']) or 'config'}: {err['msg']}"
+            for err in e.errors()
+        )
+        raise RpcError(INVALID_PARAMS, f"invalid config value: {problems}") from e
+    if check_timezone:
+        try:
+            zoneinfo.ZoneInfo(cfg.timezone)
+        except (zoneinfo.ZoneInfoNotFoundError, ValueError) as e:
+            raise RpcError(
+                INVALID_PARAMS,
+                f"unknown timezone: {cfg.timezone!r} (use an IANA name like 'Asia/Singapore')",
+            ) from e
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    """Replace *path* with *content* through a sibling temp file.
+
+    ``os.replace`` swaps the file in one step, so a crash or a full disk
+    mid-write leaves the old file intact instead of a truncated one. The
+    temp file takes the original's permission bits first, so a ``chmod
+    600`` the user applied survives the save; a new file gets the usual
+    umask-based mode, as ``write_text`` would give it. A symlinked file is
+    written through the link, so the link itself stays in place.
+    """
+    if path.is_symlink():
+        path = path.resolve()
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        with tmp.open("w", encoding="utf-8") as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        if path.exists():
+            shutil.copymode(path, tmp)
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def read_prompt() -> dict[str, Any]:
@@ -85,7 +144,7 @@ def read_prompt() -> dict[str, Any]:
 def write_prompt(content: str) -> dict[str, Any]:
     s = get_settings()
     s.prompt_path.parent.mkdir(parents=True, exist_ok=True)
-    s.prompt_path.write_text(content, encoding="utf-8")
+    _atomic_write_text(s.prompt_path, content)
     return {"ok": True, "bytes": len(content.encode("utf-8"))}
 
 
@@ -104,7 +163,7 @@ def write_rules(content: str) -> dict[str, Any]:
     except yaml.YAMLError as e:
         raise RpcError(INVALID_PARAMS, f"invalid YAML: {e}") from e
     s.rules_path.parent.mkdir(parents=True, exist_ok=True)
-    s.rules_path.write_text(content, encoding="utf-8")
+    _atomic_write_text(s.rules_path, content)
     return {"ok": True}
 
 

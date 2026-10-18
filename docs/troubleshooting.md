@@ -4,22 +4,31 @@ Symptoms first, then the usual causes. For each, what to try in order.
 
 ## Authentication fails
 
-### `AADSTS530032` or `AADSTS7000116` during `bootstrap_auth.py`
+### `AADSTS530032`, `AADSTS7000116` or `AADSTS530036`
 
-Your tenant administrator has disabled device-code flow. Fallback: run the
-auth on your laptop and forward the redirect port back to the server.
+Your tenant blocks device-code flow. `AADSTS530036` on refresh ("the token
+will never be usable and should be deleted") comes from a Conditional Access
+"authentication flows" policy. Switch to the authorization-code flow: set
 
-On the server, swap `DeviceCodeCredential` for `InteractiveBrowserCredential`
-in `src/hyacine/graph/auth.py`, configured to listen on `127.0.0.1:8400`.
-Then from your laptop:
+```bash
+HYACINE_GRAPH_AUTH_MODE=interactive_browser
+HYACINE_GRAPH_REDIRECT_PORT=8400   # optional, default 8400
+```
+
+in `./.env`, then open a tunnel from the machine that has the browser:
 
 ```bash
 ssh -L 8400:localhost:8400 <server>
 ```
 
-Run `bootstrap_auth.py` on the server; the browser opens on your laptop and
-the redirect flows back through the tunnel. This is a documented Azure
-Identity pattern.
+Over that session run `python scripts/bootstrap_auth.py --reset`. It prints
+the sign-in URL; open it locally and the redirect comes back through the
+tunnel. `python scripts/bootstrap_auth.py --check` later verifies the cached
+token without ever prompting.
+
+The scheduled run never starts an interactive login: with a dead refresh
+token it fails at once with `AuthenticationRequiredError` (and alerts)
+instead of waiting on a prompt no one can see. Re-run `bootstrap_auth.py`.
 
 ### `AADSTS50126`
 
@@ -85,11 +94,16 @@ lives. Default: `~/hyacine/.env`.
 
 Bump `llm_timeout_seconds` in `./config/config.yaml`. Default 300 is usually
 enough — if you hit this frequently, your fetch window is probably too large.
-The fetch reads at most 10 pages of 100 messages per window, newest first,
-and logs a `fetch_emails hit the 10-page cap` warning when older mail is left
-out (`journalctl --user -u hyacine-run | grep 'page cap'`). `fetch_max_emails`
-is not enforced yet. After a long outage you can shrink the catch-up window
-by moving the watermark (a UTC ISO-8601 timestamp) forward:
+Each run hands the LLM at most the newest `fetch_max_emails` messages of its
+window (default 500). When older mail is left out, the journal gets a
+`WARN: ... older email(s) ... left out of this digest` line and the digest
+says so at the top. Lowering `fetch_max_emails` is the quickest way to shrink
+a slow run. The fetch itself stops at 10 pages of 100 messages and logs a
+`fetch_emails hit the 10-page cap` warning
+(`journalctl --user -u hyacine-run | grep -E 'left out|page cap'`). Omitted
+mail is not picked up later: the watermark still advances. To shrink the
+catch-up window itself after a long outage, move the watermark (a UTC
+ISO-8601 timestamp) forward:
 
 ```bash
 sqlite3 ./data/hyacine.db \

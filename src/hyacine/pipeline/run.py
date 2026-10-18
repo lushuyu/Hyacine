@@ -208,11 +208,20 @@ def run_pipeline(
     # --- Phase 1: Fetch ---
     _p("fetch", "running")
     try:
+        # allow_interactive=False is load-bearing: this runs unattended from a
+        # systemd timer. With interactive auth enabled, a revoked refresh token
+        # sends the run into a device-code/browser flow no one is watching, and
+        # it blocks until that flow times out (~15 min) before failing anyway.
+        # Silent-only turns that into an immediate AuthenticationRequiredError.
         cred, _ = load_or_create_record(
             settings.graph_client_id,
             settings.graph_tenant_id,
             settings.auth_dir,
             settings.scope_list,
+            auth_mode=settings.graph_auth_mode,
+            redirect_port=settings.graph_redirect_port,
+            allow_interactive=False,
+            record_path=settings.auth_record_path,
         )
         emails = fetch_emails(cred, watermark, now_utc)
         calendar = fetch_calendar(cred, now_local.date(), timezone_name=cfg.timezone)
@@ -232,6 +241,30 @@ def run_pipeline(
             pass
         return _load_record()
     _p("fetch", "ok")
+
+    # Enforce fetch_max_emails. fetch_emails returns newest first, so the cap
+    # drops the oldest mail in the window. The watermark still advances to
+    # now_utc (the newest mail always reaches today's digest), so whatever is
+    # left out, by this cap or by fetch's own page cap, is reported here and
+    # in a note on the LLM user turn. Read the page-cap flag before slicing:
+    # a slice is a plain list (as are test stubs).
+    fetch_page_cap_hit = bool(getattr(emails, "page_cap_hit", False))
+    max_emails = max(1, cfg.fetch_max_emails)
+    omitted_count = max(0, len(emails) - max_emails)
+    emails = emails[:max_emails]
+    omitted_phrase = ""
+    if fetch_page_cap_hit:
+        omitted_phrase = f"at least {omitted_count}" if omitted_count else "an unknown number of"
+    elif omitted_count:
+        omitted_phrase = str(omitted_count)
+    if omitted_phrase:
+        print(
+            f"WARN: {omitted_phrase} older email(s) received since {watermark.isoformat()} "
+            f"left out of this digest; kept the newest {len(emails)} "
+            f"(fetch_max_emails={cfg.fetch_max_emails}"
+            f"{', fetch page cap hit' if fetch_page_cap_hit else ''})",
+            file=sys.stderr,
+        )
 
     # --- Phase 2: Classify ---
     _p("classify", "running")
@@ -270,6 +303,14 @@ def run_pipeline(
         "Generate the daily report from the JSON on stdin. "
         f"Respond in {lang_label}."
     )
+    if omitted_phrase:
+        window_start = watermark.astimezone(local_tz).strftime("%Y-%m-%d %H:%M")
+        user_message += (
+            f" NOTE: {omitted_phrase} older email(s) received since {window_start} "
+            f"({cfg.timezone}) are not in the JSON: it holds only the newest "
+            f"{len(emails)} of this window, because of the per-run email limit. "
+            "Mention this omission at the top of the report."
+        )
 
     try:
         # Build the active provider from config. resolve() handles three

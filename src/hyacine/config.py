@@ -67,6 +67,14 @@ class Settings(BaseSettings):
     graph_client_id: str = "14d82eec-204b-4c2f-b7e8-296a70dab67e"
     graph_tenant_id: str = "common"
     graph_scopes: str = "User.Read Mail.Read Mail.Send Calendars.Read"
+    # "device_code" or "interactive_browser". Tenants that enable the
+    # Conditional Access "authentication flows" policy reject device code with
+    # AADSTS530036 on refresh; those deployments must use interactive_browser.
+    graph_auth_mode: str = "device_code"
+    # Loopback port for the interactive_browser redirect. On a headless host,
+    # forward it from the machine running the browser:
+    #     ssh -L 8400:localhost:8400 user@host
+    graph_redirect_port: int = 8400
 
     # Monitoring
     ntfy_topic: str = ""

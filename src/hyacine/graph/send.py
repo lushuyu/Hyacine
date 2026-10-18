@@ -7,7 +7,7 @@ import uuid
 import bleach
 import httpx
 import markdown as md_lib
-from azure.identity import DeviceCodeCredential
+from azure.core.credentials import TokenCredential
 
 from hyacine.graph._http import raise_for_graph_status, request_with_retry
 from hyacine.graph.email_render import (
@@ -109,7 +109,7 @@ def render_html_fragment(markdown_text: str) -> str:
 
 
 def send_email(
-    cred: DeviceCodeCredential,
+    cred: TokenCredential,
     recipient: str,
     subject: str,
     markdown_body: str,

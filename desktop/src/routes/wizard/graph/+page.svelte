@@ -17,46 +17,81 @@
   let copied = $state(false);
   let uriCopied = $state(false);
   let unsub: UnlistenFn | null = null;
+  let destroyed = false;
+  // Only this page cancels flows (Cancel, or leaving mid-flow). A
+  // 'cancelled' event it didn't ask for is a flow an earlier visit
+  // abandoned finally ending, not the one on screen.
+  let cancelRequested = false;
+
+  function onFlowEvent(e: DeviceFlowEvent) {
+    // A code for the flow the user just cancelled.
+    if (e.state === 'awaiting_user' && cancelRequested) return;
+    if (e.state === 'cancelled' && !cancelRequested) {
+      // That worker has exited now, so a fresh start can't be refused.
+      if (flow === 'idle') void startFlow();
+      return;
+    }
+    flow = e.state;
+    if (e.user_code) code = e.user_code;
+    if (e.verification_uri) uri = e.verification_uri;
+    if (e.username) user = e.username;
+    if (e.detail) detail = e.detail;
+    if (e.state === 'approved') {
+      wizard.update((w) => ({
+        ...w,
+        graph: { signed_in: true, display_name: user, upn: user }
+      }));
+    }
+  }
 
   onMount(async () => {
     // Maybe we already have a token.
-    const me = await ipc.graph.me();
-    if (me.signed_in) {
-      flow = 'approved';
-      user = me.display_name ?? me.mail ?? me.user_principal_name ?? '';
-      wizard.update((w) => ({
-        ...w,
-        graph: { signed_in: true, display_name: user, upn: me.user_principal_name ?? '' }
-      }));
-      return;
-    }
-
-    unsub = await ipc.onEvent<DeviceFlowEvent>('rpc:graph/device_flow', (e) => {
-      flow = e.state;
-      if (e.user_code) code = e.user_code;
-      if (e.verification_uri) uri = e.verification_uri;
-      if (e.username) user = e.username;
-      if (e.detail) detail = e.detail;
-      if (e.state === 'approved') {
+    try {
+      const me = await ipc.graph.me();
+      if (destroyed) return;
+      if (me.signed_in) {
+        flow = 'approved';
+        user = me.display_name ?? me.mail ?? me.user_principal_name ?? '';
         wizard.update((w) => ({
           ...w,
-          graph: { signed_in: true, display_name: user, upn: user }
+          graph: { signed_in: true, display_name: user, upn: me.user_principal_name ?? '' }
         }));
+        return;
       }
-    });
+    } catch {
+      /* not signed in as far as we can tell; start the device flow */
+    }
 
+    const off = await ipc.onEvent<DeviceFlowEvent>('rpc:graph/device_flow', onFlowEvent);
+    if (destroyed) {
+      off();
+      return;
+    }
+    unsub = off;
+    await startFlow();
+  });
+
+  onDestroy(() => {
+    destroyed = true;
+    unsub?.();
+    if (flow === 'awaiting_user') ipc.graph.cancelDeviceFlow().catch(() => {});
+  });
+
+  async function startFlow() {
+    cancelRequested = false;
+    flow = 'idle';
+    code = '';
+    uri = '';
+    detail = '';
     try {
+      // If a flow is already live the sidecar answers already_running and
+      // re-sends its code, which arrives through onFlowEvent.
       await ipc.graph.startDeviceFlow();
     } catch (err) {
       flow = 'failed';
       detail = String(err);
     }
-  });
-
-  onDestroy(() => {
-    unsub?.();
-    if (flow === 'awaiting_user') ipc.graph.cancelDeviceFlow().catch(() => {});
-  });
+  }
 
   async function copy() {
     await navigator.clipboard.writeText(code);
@@ -80,9 +115,20 @@
     }
   }
 
+  // Stay on the page so the user can start over with Try again. The
+  // sidecar can't interrupt the old worker, but it discards its result.
   async function cancel() {
-    await ipc.graph.cancelDeviceFlow();
-    await goto('/wizard/provider/');
+    cancelRequested = true;
+    flow = 'cancelled';
+    code = '';
+    uri = '';
+    detail = '';
+    try {
+      await ipc.graph.cancelDeviceFlow();
+    } catch (err) {
+      flow = 'failed';
+      detail = String(err);
+    }
   }
 
   async function next() {
@@ -175,13 +221,7 @@
       {#if detail}
         <div class="text-xs font-mono text-[rgb(var(--fg-muted))]">{detail}</div>
       {/if}
-      <button
-        class="btn-secondary"
-        onclick={async () => {
-          flow = 'idle';
-          await ipc.graph.startDeviceFlow();
-        }}>{$t('retry')}</button
-      >
+      <button class="btn-secondary" onclick={startFlow}>{$t('retry')}</button>
     </div>
   {/if}
 

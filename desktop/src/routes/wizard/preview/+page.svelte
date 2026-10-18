@@ -30,14 +30,19 @@
 
   async function saveConfigFirst() {
     const w = $wizard;
-    await ipc.config.write({
-      recipient_email: w.delivery.email,
-      timezone: w.delivery.timezone,
+    // config.write overwrites every key it is given, and the store starts
+    // from blank defaults. The delivery and identity steps never leave
+    // these blank, so a blank one was never filled in: keep the saved value.
+    const fields: Record<string, unknown> = {
       language: w.delivery.language,
-      run_time: w.schedule.run_time,
-      identity: w.identity,
-      priorities: w.priorities
-    });
+      run_time: w.schedule.run_time
+    };
+    if (w.delivery.email.trim()) fields.recipient_email = w.delivery.email;
+    if (w.delivery.timezone.trim()) fields.timezone = w.delivery.timezone;
+    if (Object.values(w.identity).some((v) => v.trim())) fields.identity = w.identity;
+    // An empty list can be deliberate, but only once it replaced the saved one.
+    if (w.seeded || w.priorities.length) fields.priorities = w.priorities;
+    await ipc.config.write(fields);
   }
 
   async function runPreview() {

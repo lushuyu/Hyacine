@@ -47,6 +47,8 @@
           ? `${$t('promptDryRunSucceeded')} ${r.duration_ms}ms`
           : `${$t('providerBad')}: ${r.error ?? ''}`
       );
+    } catch (e) {
+      pushToast('error', formatError(e));
     } finally {
       testing = false;
     }

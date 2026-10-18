@@ -11,10 +11,13 @@ The flow is split across three calls so the webview can animate polling:
                                     the "signed in as" badge.
 
 Cancellation caveat: ``DeviceCodeCredential.authenticate`` blocks in a
-background thread and has no interrupt hook, so the cancel event only takes
-effect *after* the current polling round finishes (or the user actually
-approves/denies). We therefore set ``timeout`` to a short value so
-cancellation becomes visible within a few seconds in the worst case.
+background thread and has no interrupt hook (a ``timeout`` passed to it is
+ignored; one passed to the constructor ends the whole flow with an error).
+A cancelled worker is therefore abandoned: it keeps polling until its code
+expires (about 15 minutes) or the user approves/denies, then exits without
+saving the record, and stays silent if a newer flow has started meanwhile.
+A new ``graph.start_device_flow`` doesn't wait for it; it starts a fresh
+flow with a new code straight away.
 """
 from __future__ import annotations
 
@@ -31,32 +34,53 @@ from hyacine.graph.auth import (
     save_authentication_record,
 )
 
-# How long azure-identity waits for the user before each polling round. We
-# keep this short so cancellation feels responsive; the credential retries
-# internally until the overall device-code expiry.
-_DEVICE_POLL_TIMEOUT_SECONDS = 8
-
-_state: dict[str, Any] = {"thread": None, "cancel": None}
+# The current flow: its worker thread, its cancel event (which doubles as the
+# flow's identity) and its last "awaiting_user" payload, kept so a page that
+# remounts mid-flow is shown the code again. A superseded worker sees that
+# ``_state["cancel"]`` is no longer its own event and stays silent. ``_lock``
+# makes that check plus the emit atomic with respect to a new start.
+_state: dict[str, Any] = {"thread": None, "cancel": None, "prompt": None}
+_lock = threading.Lock()
 
 
 def start_device_flow(*, emit: Callable[[str, Any], None]) -> dict[str, Any]:
-    if _state["thread"] is not None and _state["thread"].is_alive():
-        return {"already_running": True}
+    with _lock:
+        thread, live_cancel = _state["thread"], _state["cancel"]
+        if (
+            thread is not None
+            and thread.is_alive()
+            and live_cancel is not None
+            and not live_cancel.is_set()
+        ):
+            if _state["prompt"] is not None:
+                emit("graph.device_flow", _state["prompt"])
+            return {"already_running": True}
+        # No flow, or only a cancelled one still polling: abandon it.
+        cancel = threading.Event()
+        _state.update(thread=None, cancel=cancel, prompt=None)
 
     s = get_settings()
-    cancel = threading.Event()
-    _state["cancel"] = cancel
+
+    def _current() -> bool:
+        return _state["cancel"] is cancel
 
     def _prompt(verification_uri: str, user_code: str, expires_on: object) -> None:
-        emit(
-            "graph.device_flow",
-            {
-                "state": "awaiting_user",
-                "user_code": user_code,
-                "verification_uri": verification_uri,
-                "expires_on": str(expires_on),
-            },
-        )
+        payload = {
+            "state": "awaiting_user",
+            "user_code": user_code,
+            "verification_uri": verification_uri,
+            "expires_on": str(expires_on),
+        }
+        with _lock:
+            if _current() and not cancel.is_set():
+                _state["prompt"] = payload
+                emit("graph.device_flow", payload)
+
+    def _finish(payload: dict[str, Any]) -> None:
+        with _lock:
+            if _current():
+                _state["prompt"] = None
+                emit("graph.device_flow", payload)
 
     cred = build_credential(
         s.graph_client_id,
@@ -68,26 +92,21 @@ def start_device_flow(*, emit: Callable[[str, Any], None]) -> dict[str, Any]:
 
     def _worker() -> None:
         try:
-            record = cred.authenticate(
-                scopes=s.scope_list,
-                timeout=_DEVICE_POLL_TIMEOUT_SECONDS,
-            )
+            record = cred.authenticate(scopes=s.scope_list)
             if cancel.is_set():
-                emit("graph.device_flow", {"state": "cancelled"})
+                _finish({"state": "cancelled"})
                 return
             save_authentication_record(record, s.auth_record_path)
-            emit(
-                "graph.device_flow",
-                {"state": "approved", "username": record.username},
-            )
+            _finish({"state": "approved", "username": record.username})
         except Exception as e:  # noqa: BLE001
             if cancel.is_set():
-                emit("graph.device_flow", {"state": "cancelled"})
+                _finish({"state": "cancelled"})
             else:
-                emit("graph.device_flow", {"state": "failed", "detail": str(e)})
+                _finish({"state": "failed", "detail": str(e)})
 
     t = threading.Thread(target=_worker, name="graph-device-flow", daemon=True)
-    _state["thread"] = t
+    with _lock:
+        _state["thread"] = t
     t.start()
     return {"started": True}
 
@@ -97,11 +116,14 @@ def cancel_device_flow() -> dict[str, Any]:
 
     ``azure-identity``'s device-code implementation does not expose a
     cancellation primitive, so we set a flag and let the worker swallow the
-    inevitable timeout (or the user-approved record) without persisting it.
+    eventual expiry (or the user-approved record) without persisting it.
+    The next ``start_device_flow`` replaces the flow instead of waiting.
     """
-    c = _state.get("cancel")
-    if c is not None:
-        c.set()
+    with _lock:
+        c = _state.get("cancel")
+        if c is not None:
+            c.set()
+        _state["prompt"] = None
     return {"ok": True}
 
 

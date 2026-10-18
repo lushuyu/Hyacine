@@ -3,7 +3,7 @@
   import { goto } from '$app/navigation';
   import { ipc } from '$lib/ipc';
   import { FALLBACK_PRESETS, formatError } from '$lib/provider-presets';
-  import { pushToast } from '$lib/stores';
+  import { loadWizardFromConfig, pushToast } from '$lib/stores';
   import { setTheme, type Theme } from '$lib/stores';
   import { t } from '$lib/i18n';
   import { KeyRound, RefreshCw, LogOut } from 'lucide-svelte';
@@ -80,14 +80,16 @@
     }
   }
 
+  // Neither entry point deletes anything. The provider step keeps the
+  // stored key until a new one is saved over it, and seeding the wizard
+  // stops the preview step from writing blank defaults over config.yaml.
   async function rotateProviderKey() {
-    if (currentProvider) {
-      await ipc.secrets.remove(currentProvider.secret_slug);
-    }
+    await loadWizardFromConfig();
     await goto('/wizard/provider/');
   }
 
   async function rerunWizard() {
+    await loadWizardFromConfig();
     await goto('/wizard/welcome/');
   }
 

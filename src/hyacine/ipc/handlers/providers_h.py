@@ -12,7 +12,10 @@ Exposes three methods to the desktop shell:
 
 Secrets flow the same way as everywhere else: the Rust parent fetches the
 key from the OS keychain and passes it into ``providers.test`` as a
-parameter. The sidecar does not read the keychain itself.
+parameter. The sidecar does not read the keychain itself. Its only other
+key is ``HYACINE_LLM_API_KEY``, which belongs to the provider that was
+active when the sidecar spawned, so ``providers.test`` only falls back to
+it when the tested endpoint is the active one (see :func:`_env_key_for`).
 """
 from __future__ import annotations
 
@@ -21,7 +24,6 @@ import subprocess
 import tempfile
 import time
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any
 
 import httpx
@@ -89,6 +91,7 @@ def test(  # noqa: C901 — mirrors providers.api_format branches; keeping a sin
     api_format: str = "",
     api_key: str = "",
     model: str = "",
+    use_cli_login: bool = False,
     emit: Callable[[str, Any], None] | None = None,
     **_: Any,
 ) -> dict[str, Any]:
@@ -99,6 +102,10 @@ def test(  # noqa: C901 — mirrors providers.api_format branches; keeping a sin
     endpoint. Returns the familiar connectivity-probe shape
     ``{kind, status, latency_ms, detail}`` so the wizard UI can reuse
     existing card components.
+
+    ``use_cli_login`` only affects ``anthropic_cli``: the probe then runs
+    without any OAuth token, so it checks the ``claude login`` credentials
+    alone (see :func:`_probe_anthropic_cli`).
     """
     preset: Provider | None = _providers.by_id(provider_id) if provider_id else None
     effective_format = api_format or (preset.api_format if preset else "")
@@ -111,8 +118,9 @@ def test(  # noqa: C901 — mirrors providers.api_format branches; keeping a sin
     # Secrets never round-trip to the webview — when the key was stored via
     # the wizard, the UI only has `has()`, not the plaintext. The Rust
     # parent populates `HYACINE_LLM_API_KEY` at sidecar spawn for the
-    # active provider's slug, so fall back to it here.
-    effective_key = api_key or os.environ.get("HYACINE_LLM_API_KEY", "")
+    # active provider's slug, so fall back to it, but only for that
+    # provider's endpoint: any other provider would receive a foreign key.
+    effective_key = api_key or _env_key_for(effective_format, effective_base)
 
     # Local providers (Ollama, LM Studio, etc.) run unauthenticated; treat
     # an empty key as "no auth header needed" rather than a validation
@@ -124,26 +132,70 @@ def test(  # noqa: C901 — mirrors providers.api_format branches; keeping a sin
     )
 
     if effective_format == "anthropic_cli":
-        return _probe_anthropic_cli(api_key=effective_key, model=effective_model)
+        return _probe_anthropic_cli(
+            api_key=effective_key, model=effective_model, use_cli_login=use_cli_login
+        )
     if effective_format == "anthropic_http":
         if not effective_base:
             return _fail("providers.test", "missing base_url for anthropic_http")
         if not effective_key:
-            return _fail("providers.test", "anthropic_http requires an api_key")
+            return _fail("providers.test", f"anthropic_http requires an api_key{_NO_KEY_HINT}")
         return _probe_anthropic_http(effective_base, effective_key, effective_model)
     if effective_format == "openai_chat":
         if not effective_base:
             return _fail("providers.test", "missing base_url for openai_chat")
         if not effective_key and not is_local:
-            return _fail("providers.test", "openai_chat requires an api_key (non-local provider)")
+            return _fail(
+                "providers.test",
+                f"openai_chat requires an api_key (non-local provider){_NO_KEY_HINT}",
+            )
         return _probe_openai_chat(effective_base, effective_key, effective_model)
     return _fail("providers.test", f"unknown api_format: {effective_format!r}")
+
+
+_NO_KEY_HINT = "; no key is stored for this provider, enter it on the provider step to test it"
+
+
+def _env_key_for(api_format: str, base_url: str) -> str:
+    """Return ``HYACINE_LLM_API_KEY`` if the probe targets the active endpoint.
+
+    The Rust parent exports the active provider's keychain secret in that
+    variable when it spawns the sidecar. Using it to test another provider
+    would hand, say, an Anthropic Console key to DeepSeek or a localhost
+    server. So it is only returned when the tested ``api_format`` and
+    ``base_url`` match the provider ``config.yaml`` makes active — the same
+    endpoint the daily run sends this key to. ``anthropic_cli`` never takes
+    it: the CLI authenticates with ``CLAUDE_CODE_OAUTH_TOKEN`` (already in
+    the sidecar env when the CLI is active) or its own ``claude login``.
+    """
+    env_key = os.environ.get("HYACINE_LLM_API_KEY", "")
+    if not env_key or api_format == "anthropic_cli":
+        return ""
+    from hyacine.config import get_settings, load_yaml_config  # noqa: PLC0415
+
+    try:
+        cfg = load_yaml_config(get_settings().config_path)
+    except Exception:  # noqa: BLE001 — unreadable config: no provider is known to be active
+        return ""
+    active = _providers.resolve(
+        provider_id=cfg.llm_provider,
+        api_format=cfg.llm_api_format,
+        base_url=cfg.llm_base_url,
+        model=cfg.llm_model,
+    )
+    if active.api_format != api_format:
+        return ""
+    if active.base_url.rstrip("/") != base_url.rstrip("/"):
+        return ""
+    return env_key
 
 
 # ── Individual probes ──────────────────────────────────────────────────────
 
 
-def _probe_anthropic_cli(*, api_key: str, model: str) -> dict[str, Any]:
+def _probe_anthropic_cli(
+    *, api_key: str, model: str, use_cli_login: bool = False
+) -> dict[str, Any]:
     """Invoke ``claude -p "ping"`` using an optional OAuth token or existing CLI credentials.
 
     The ``api_key`` parameter is optional. When non-empty we export it as
@@ -156,6 +208,13 @@ def _probe_anthropic_cli(*, api_key: str, model: str) -> dict[str, Any]:
 
     Genuine blockers (the ``claude`` binary itself being absent) still fail
     loud; that's what the :func:`resolve_claude_bin` branch below catches.
+
+    ``use_cli_login`` tests the ``claude login`` credentials only: ``api_key``
+    is ignored and ``CLAUDE_CODE_OAUTH_TOKEN`` / its
+    ``HYACINE_CLAUDE_CODE_OAUTH_TOKEN`` alias are dropped from the env. The
+    sidecar env keeps a token until it respawns, so without this a user who
+    is replacing a stored token with ``claude login`` would be testing the
+    token that is about to be deleted.
 
     The env comes from :func:`build_env` and the child runs from an empty
     temp dir, as in the daily run, so the probe gets the same API-key
@@ -170,7 +229,10 @@ def _probe_anthropic_cli(*, api_key: str, model: str) -> dict[str, Any]:
 
     start = _now_ms()
     base_env = os.environ.copy()
-    if api_key.strip():
+    if use_cli_login:
+        base_env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
+        base_env.pop("HYACINE_CLAUDE_CODE_OAUTH_TOKEN", None)
+    elif api_key.strip():
         base_env["CLAUDE_CODE_OAUTH_TOKEN"] = api_key.strip()
     try:
         env = build_env(base_env)
@@ -327,8 +389,5 @@ def _probe_openai_chat(base_url: str, api_key: str, model: str) -> dict[str, Any
 def _fail(kind: str, detail: str) -> dict[str, Any]:
     return {"kind": kind, "status": "fail", "latency_ms": 0, "detail": detail}
 
-
-# Unused in this module but kept handy for future wizard flows:
-_ = Path
 
 __all__ = ["current_provider", "list_providers", "test"]

@@ -16,10 +16,11 @@ from __future__ import annotations
 
 import io
 import json
+from pathlib import Path
 
 import pytest
 
-from hyacine.ipc import protocol
+from hyacine.ipc import protocol, router
 from hyacine.ipc.server import serve
 
 
@@ -124,3 +125,38 @@ def test_serve_translates_handler_typeerror_to_invalid_params() -> None:
     ]
     target = next(r for r in responses if r.get("id") == 11)
     assert target["error"]["code"] == protocol.INVALID_PARAMS
+
+
+def test_serve_reports_invalid_config_write_as_invalid_params(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = tmp_path / "config.yaml"
+    monkeypatch.setenv("HYACINE_CONFIG_PATH", str(config))
+    stdin = io.StringIO(
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 12,
+                "method": "config.write",
+                "params": {"timezone": "Singapur"},
+            }
+        )
+        + "\n"
+    )
+    stdout = io.StringIO()
+    serve(stdin, stdout, io.StringIO())
+    responses = [json.loads(ln) for ln in stdout.getvalue().splitlines() if ln.strip()]
+    target = next(r for r in responses if r.get("id") == 12)
+    assert target["error"]["code"] == protocol.INVALID_PARAMS
+    assert "unknown timezone: 'Singapur'" in target["error"]["message"]
+    assert not config.exists()
+
+
+def test_router_has_no_direct_claude_probe() -> None:
+    """The Claude card goes through providers.test. The old direct probe and
+    connectivity.probe_all had no callers and sent OAuth tokens in a way the
+    API rejects, so they are gone; the probes the desktop uses remain."""
+    handlers = router.build_handlers(emit=lambda *_a: None, log=lambda *_a, **_k: None)
+    assert "connectivity.probe_all" not in handlers
+    assert {"connectivity.probe", "providers.test", "graph.me"} <= handlers.keys()
+    assert handlers["connectivity.probe"]("claude")["detail"] == "unknown probe"

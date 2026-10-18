@@ -39,7 +39,6 @@ def build_handlers(
         "config.bootstrap": config_h.bootstrap,
         # connectivity
         "connectivity.probe": lambda kind, **kw: connectivity_h.probe(kind, emit=emit, **kw),
-        "connectivity.probe_all": lambda **kw: connectivity_h.probe_all(emit=emit, **kw),
         # graph / oauth
         "graph.start_device_flow": lambda **kw: graph_h.start_device_flow(emit=emit, **kw),
         "graph.cancel_device_flow": graph_h.cancel_device_flow,

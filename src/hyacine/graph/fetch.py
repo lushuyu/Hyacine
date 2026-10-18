@@ -8,7 +8,7 @@ from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
-from azure.identity import DeviceCodeCredential
+from azure.core.credentials import TokenCredential
 
 from hyacine.graph._http import raise_for_graph_status, request_with_retry
 from hyacine.models import CalendarEvent, CategoryHint, EmailMessage, EventAttendee, Importance
@@ -44,7 +44,18 @@ _IANA_TO_WINDOWS: dict[str, str] = {
 }
 
 
-def _get_bearer(cred: DeviceCodeCredential) -> str:
+class FetchedEmails(list[EmailMessage]):
+    """The list :func:`fetch_emails` returns, plus a ``page_cap_hit`` flag.
+
+    ``page_cap_hit`` is True when ``max_pages`` ended the walk with more
+    mail pending, i.e. older mail in the window was never fetched. A slice
+    is a plain ``list``, so read the flag before slicing.
+    """
+
+    page_cap_hit: bool = False
+
+
+def _get_bearer(cred: TokenCredential) -> str:
     token = cred.get_token("https://graph.microsoft.com/.default")
     return f"Bearer {token.token}"
 
@@ -117,7 +128,7 @@ def _resolve_excluded_folder_ids(client: httpx.Client, headers: dict[str, str]) 
 
 
 def fetch_emails(
-    cred: DeviceCodeCredential,
+    cred: TokenCredential,
     since: datetime,
     until: datetime,
     *,
@@ -128,7 +139,8 @@ def fetch_emails(
 
     Uses $select to trim the payload, $orderby receivedDateTime desc, $top=100,
     and walks @odata.nextLink up to max_pages (logging a warning when the cap
-    cuts the window short — the oldest mail in it is then left out).
+    cuts the window short — the oldest mail in it is then left out). The
+    result is a :class:`FetchedEmails` whose ``page_cap_hit`` records that.
 
     /me/messages covers every folder, so messages in Sent Items, Drafts,
     Deleted Items, Junk and Outbox are skipped, as is Hyacine's own digest.
@@ -151,7 +163,7 @@ def fetch_emails(
 
     headers = {"Authorization": _get_bearer(cred)}
     url: str | None = f"{_GRAPH_BASE}/me/messages"
-    results: list[EmailMessage] = []
+    results = FetchedEmails()
     pages = 0
     seen = 0
 
@@ -205,12 +217,13 @@ def fetch_emails(
             "messages fetched for %s..%s — older mail in this window is not included",
             max_pages, len(results), seen, since_iso, until_iso,
         )
+    results.page_cap_hit = url is not None
 
     return results
 
 
 def fetch_calendar(
-    cred: DeviceCodeCredential,
+    cred: TokenCredential,
     day: date,
     *,
     timezone_name: str = "UTC",
@@ -312,4 +325,4 @@ def fetch_calendar(
     return results
 
 
-__all__ = ["fetch_emails", "fetch_calendar"]
+__all__ = ["FetchedEmails", "fetch_emails", "fetch_calendar"]

@@ -59,6 +59,24 @@ Apple Silicon bundle via Rosetta.
 Cross-arch PyInstaller builds aren't supported — each runner produces
 the binary for its own host.
 
+## Data directory
+
+A one-file build extracts itself to a temp dir, so `hyacine.config`'s
+repo-root fallback would put `config/config.yaml`, `data/hyacine.db` and
+the Graph auth record in the OS temp dir. The Tauri parent passes
+`HYACINE_REPO_ROOT` pointing at the per-user app data dir
+(`app_local_data_dir()`: `~/.local/share/com.hyacine.desktop`,
+`~/Library/Application Support/com.hyacine.desktop`,
+`%LOCALAPPDATA%\com.hyacine.desktop`), and `entry.py` pins the same
+directory when the binary runs on its own. Export `HYACINE_REPO_ROOT`
+before `npm run tauri:dev` to point the app at a repo checkout instead.
+
+## UTF-8 stdio
+
+The spec passes the `X utf8` bootloader option. The Rust parent writes raw
+UTF-8 JSON, Windows Python decodes piped stdin with the ANSI code page by
+default, and a frozen interpreter ignores `PYTHONUTF8`.
+
 ## Why no UPX
 
 The spec sets `upx=False`. UPX trips Windows Defender and breaks macOS

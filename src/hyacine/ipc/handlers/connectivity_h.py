@@ -1,13 +1,13 @@
-"""Connectivity probes — DNS/TCP, Claude API, Microsoft Graph, SendMail.
+"""Connectivity probes — DNS/TCP, Microsoft Graph, SendMail.
 
 Every probe returns ``{kind, status: ok|fail|skipped, latency_ms, detail}``.
 Events ``connectivity.progress`` are emitted as each probe transitions so the
 UI can animate running → ok/fail.
 
-The Claude probe authenticates with whatever the user stored — Anthropic API
-key (``x-api-key`` header) *or* Claude Code OAuth token (``Authorization:
-Bearer``). The wizard's keychain slug is fixed (``claude``) but callers pass
-the actual value in, so we accept both shapes here.
+The LLM check is not here: the wizard's Claude card goes through
+``providers.test`` (see :mod:`hyacine.ipc.handlers.providers_h`), which
+probes whichever provider is configured, with the same code paths the
+daily run uses.
 """
 from __future__ import annotations
 
@@ -18,9 +18,7 @@ from typing import Any
 
 import httpx
 
-from hyacine.config import get_settings, load_yaml_config
 from hyacine.ipc.handlers.graph_h import _get_access_token
-from hyacine.llm.providers import DEFAULT_CLAUDE_MODEL
 
 _HOSTS = ("api.anthropic.com", "graph.microsoft.com")
 
@@ -58,15 +56,6 @@ def _dns_tcp(host: str, port: int = 443, timeout: float = 4.0) -> tuple[bool, st
     return False, f"TCP: {last_err or 'unreachable'}"
 
 
-def _default_claude_model() -> str:
-    """Use the model configured by the user, not a hard-coded guess."""
-    try:
-        cfg = load_yaml_config(get_settings().config_path)
-        return cfg.llm_model or DEFAULT_CLAUDE_MODEL
-    except Exception:  # noqa: BLE001
-        return DEFAULT_CLAUDE_MODEL
-
-
 def probe_dns(**_: Any) -> dict[str, Any]:
     start = _now_ms()
     details: list[str] = []
@@ -81,63 +70,6 @@ def probe_dns(**_: Any) -> dict[str, Any]:
         "latency_ms": _now_ms() - start,
         "detail": "; ".join(details),
     }
-
-
-def probe_claude(api_key: str = "", model: str = "", **_: Any) -> dict[str, Any]:
-    """Reachability probe for the Anthropic API.
-
-    Anthropic issues two token shapes under the ``sk-ant-`` prefix:
-
-      * ``sk-ant-api*`` — Console API key → ``x-api-key`` header
-      * ``sk-ant-oat*`` — Claude Code OAuth token → ``Authorization: Bearer``
-
-    Anything else (bare bearer, JWT, etc.) goes through ``Authorization:
-    Bearer``. Sending an OAuth token in ``x-api-key`` produces a 401 with
-    ``{"message": "invalid x-api-key"}`` which is what motivated this split.
-    """
-    if not api_key:
-        return {"kind": "claude", "status": "skipped", "latency_ms": 0, "detail": "no api key"}
-    model = model or _default_claude_model()
-    start = _now_ms()
-
-    headers = {"anthropic-version": "2023-06-01", "content-type": "application/json"}
-    if api_key.startswith("sk-ant-api"):
-        headers["x-api-key"] = api_key
-    else:
-        headers["authorization"] = f"Bearer {api_key}"
-
-    try:
-        r = httpx.post(
-            "https://api.anthropic.com/v1/messages",
-            headers=headers,
-            json={
-                "model": model,
-                "max_tokens": 1,
-                "messages": [{"role": "user", "content": "ping"}],
-            },
-            timeout=10.0,
-        )
-        latency = _now_ms() - start
-        if r.status_code == 200:
-            return {
-                "kind": "claude",
-                "status": "ok",
-                "latency_ms": latency,
-                "detail": f"HTTP 200, model={model}",
-            }
-        return {
-            "kind": "claude",
-            "status": "fail",
-            "latency_ms": latency,
-            "detail": f"HTTP {r.status_code}: {r.text[:200]}",
-        }
-    except httpx.HTTPError as e:
-        return {
-            "kind": "claude",
-            "status": "fail",
-            "latency_ms": _now_ms() - start,
-            "detail": str(e),
-        }
 
 
 def probe_graph(access_token: str = "", **_: Any) -> dict[str, Any]:
@@ -243,7 +175,6 @@ def probe_sendmail(to: str = "", access_token: str = "", **_: Any) -> dict[str, 
 # RPC params without knowing the probe's exact signature.
 _DISPATCH: dict[str, Callable[..., dict[str, Any]]] = {
     "dns": probe_dns,
-    "claude": probe_claude,
     "graph": probe_graph,
     "sendmail": probe_sendmail,
 }
@@ -263,20 +194,3 @@ def probe(
     emit("connectivity.progress", result)
     return result
 
-
-def probe_all(
-    *,
-    emit: Callable[[str, Any], None],
-    claude_api_key: str = "",
-    graph_token: str = "",
-    recipient: str = "",
-    send_test_email: bool = False,
-) -> dict[str, Any]:
-    results = [
-        probe("dns", emit=emit),
-        probe("claude", emit=emit, api_key=claude_api_key),
-        probe("graph", emit=emit, access_token=graph_token),
-    ]
-    if send_test_email:
-        results.append(probe("sendmail", emit=emit, access_token=graph_token, to=recipient))
-    return {"results": results, "ok": all(r["status"] != "fail" for r in results)}

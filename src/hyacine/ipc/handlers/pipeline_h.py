@@ -65,6 +65,36 @@ def _inject_claude_code_oauth() -> None:
         os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = from_env
 
 
+def _forget_cached_config() -> None:
+    """Make the next ``run_pipeline`` re-read Settings and config.yaml.
+
+    ``hyacine.pipeline.run`` caches both in module globals for the life of
+    the process. That suits the one-shot CLI/systemd run, but the sidecar
+    lives for the whole app session, so a model, language, recipient or
+    timezone saved through ``config.write`` would otherwise be ignored until
+    the app restarts (while the preview footer, which reloads the config,
+    claimed the new model).
+    """
+    import hyacine.pipeline.run as run_module  # noqa: PLC0415
+
+    run_module._settings = None
+    run_module._cfg = None
+
+
+def _failure_reason(record: Any) -> str:
+    """One-line reason a recorded run failed, as ``main()`` prints it.
+
+    That is the final exception of the stored traceback. The note
+    ``run_pipeline`` appends to it when sendMail's outcome is unknown is
+    dropped: callers get that as ``delivery_uncertain``.
+    """
+    from hyacine.pipeline.run import _DELIVERY_UNKNOWN_NOTE, _exception_summary  # noqa: PLC0415
+
+    summary = _exception_summary(getattr(record, "error_traceback", None) or "")
+    summary = summary.removesuffix(_DELIVERY_UNKNOWN_NOTE).rstrip()
+    return summary or "no error details were recorded"
+
+
 def dry_run(
     *,
     emit: Callable[[str, Any], None],
@@ -81,9 +111,10 @@ def dry_run(
     _inject_claude_code_oauth()
 
     try:
-        from hyacine.pipeline.run import run_pipeline  # noqa: PLC0415
+        from hyacine.pipeline.run import _exception_summary, run_pipeline  # noqa: PLC0415
     except ImportError:
         return _mock_dry_run(emit, started)
+    _forget_cached_config()
 
     # Event-driven stage UI — `run_pipeline` invokes this callback at each
     # real boundary (running → ok/fail) so the wizard animates in lockstep
@@ -95,20 +126,29 @@ def dry_run(
         with _silence_stdout():
             record = run_pipeline(dry_run=True, progress=progress)
     except Exception as e:  # noqa: BLE001
-        log("error", "dry-run-failed", trace=traceback.format_exc())
+        tb = traceback.format_exc()
+        log("error", "dry-run-failed", trace=tb)
         for stage in _STAGES:
             _emit_stage(emit, stage, "fail")
-        return {"ok": False, "error": str(e), "duration_ms": int((time.time() - started) * 1000)}
+        return {
+            "ok": False,
+            "error": _exception_summary(tb) or str(e),
+            "duration_ms": int((time.time() - started) * 1000),
+        }
 
     markdown = getattr(record, "markdown", "") or ""
-    return {
-        "ok": str(getattr(record, "status", "")).lower().endswith("success")
-        or markdown != "",
+    ok = str(getattr(record, "status", "")).lower().endswith("success") or markdown != ""
+    result: dict[str, Any] = {
+        "ok": ok,
         "duration_ms": int((time.time() - started) * 1000),
         "html": _markdown_to_html(markdown),
         "subject": f"Hyacine · {datetime.now().strftime('%Y-%m-%d')} (preview)",
         "summary": {"email_count": getattr(record, "email_count", 0) or 0},
     }
+    if not ok:
+        # A fetch or LLM failure is recorded on the run row, not raised.
+        result["error"] = _failure_reason(record)
+    return result
 
 
 def run(
@@ -116,14 +156,26 @@ def run(
     emit: Callable[[str, Any], None],
     log: Callable[..., None],
 ) -> dict[str, Any]:
-    """Real pipeline run — fetch + summarise + deliver."""
+    """Real pipeline run — fetch + summarise + deliver.
+
+    Besides ``ok``, the result carries ``delivery_uncertain``: true when the
+    digest may already be in the inbox although the run failed (sendMail's
+    outcome is unknown, or it was sent but the run could not be recorded),
+    so running again could mail it twice. ``main()`` exits ``EXIT_NO_RETRY``
+    in the same cases. A failed run also gets ``error``, a one-line reason.
+    """
     started = time.time()
     _inject_claude_code_oauth()
 
     try:
-        from hyacine.pipeline.run import run_pipeline  # noqa: PLC0415
+        from hyacine.pipeline.run import (  # noqa: PLC0415
+            DeliveredButNotRecorded,
+            _exception_summary,
+            run_pipeline,
+        )
     except ImportError as e:
-        return {"ok": False, "error": str(e), "duration_ms": 0}
+        return {"ok": False, "error": str(e), "delivery_uncertain": False, "duration_ms": 0}
+    _forget_cached_config()
 
     def progress(stage: str, status: str) -> None:
         _emit_stage(emit, stage, status)
@@ -132,17 +184,24 @@ def run(
         with _silence_stdout():
             record = run_pipeline(progress=progress)
     except Exception as e:  # noqa: BLE001
-        log("error", "run-failed", trace=traceback.format_exc())
+        tb = traceback.format_exc()
+        log("error", "run-failed", trace=tb)
         for stage in _STAGES:
             _emit_stage(emit, stage, "fail")
-        return {"ok": False, "error": str(e), "duration_ms": int((time.time() - started) * 1000)}
+        return {
+            "ok": False,
+            "error": _exception_summary(tb) or str(e),
+            "delivery_uncertain": isinstance(e, DeliveredButNotRecorded),
+            "duration_ms": int((time.time() - started) * 1000),
+        }
 
     status = str(getattr(record, "status", "")).lower()
     ok = status.endswith("success")
 
-    return {
+    result: dict[str, Any] = {
         "ok": ok,
         "duration_ms": int((time.time() - started) * 1000),
+        "delivery_uncertain": bool(getattr(record, "delivery_uncertain", False)),
         "record": {
             "id": getattr(record, "id", None),
             "status": status,
@@ -150,6 +209,9 @@ def run(
             "sent_message_id": getattr(record, "sent_message_id", None),
         },
     }
+    if not ok:
+        result["error"] = _failure_reason(record)
+    return result
 
 
 # Raw RunStatus values (see hyacine.models.RunStatus) → UI-facing buckets

@@ -58,6 +58,7 @@
       out:fly={{ x: 24, duration: 200 }}
       class="pointer-events-auto card px-4 py-3 text-sm shadow-md max-w-sm"
       class:border-red-500={tst.kind === 'error'}
+      class:border-amber-500={tst.kind === 'warning'}
       class:border-green-500={tst.kind === 'success'}
     >
       {tst.msg}

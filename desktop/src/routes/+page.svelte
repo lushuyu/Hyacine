@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import { ipc } from '$lib/ipc';
+  import { seedWizard } from '$lib/stores';
   import { t } from '$lib/i18n';
 
   let loading = $state(true);
@@ -29,6 +30,8 @@
         me.signed_in &&
         !!cfg.recipient_email &&
         (!needsKey || hasKey);
+      // A half-finished setup resumes from what was already saved.
+      if (!done) seedWizard(cfg);
       await goto(done ? '/app/dashboard/' : '/wizard/splash/', { replaceState: true });
     } catch {
       await goto('/wizard/splash/', { replaceState: true });
